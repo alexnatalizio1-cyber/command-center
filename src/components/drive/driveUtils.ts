@@ -34,19 +34,42 @@ export function getFileEmoji(mimeType: string): string {
 }
 
 export function getPreviewUrl(file: DriveFile): string | null {
+  // Google Docs/Sheets/Slides — use the pub embed URLs that work in iframes
   if (file.mimeType === 'application/vnd.google-apps.document') {
-    return `https://docs.google.com/document/d/${file.id}/edit?embedded=true`;
+    return `https://docs.google.com/document/d/${file.id}/pub?embedded=true`;
   }
   if (file.mimeType === 'application/vnd.google-apps.spreadsheet') {
-    return `https://docs.google.com/spreadsheets/d/${file.id}/edit?embedded=true`;
+    return `https://docs.google.com/spreadsheets/d/${file.id}/pubhtml?widget=true`;
   }
   if (file.mimeType === 'application/vnd.google-apps.presentation') {
-    return `https://docs.google.com/presentation/d/${file.id}/edit?embedded=true`;
+    return `https://docs.google.com/presentation/d/${file.id}/embed`;
   }
   if (file.mimeType === 'application/vnd.google-apps.form') {
-    return `https://docs.google.com/forms/d/${file.id}/edit?embedded=true`;
+    return `https://docs.google.com/forms/d/${file.id}/viewform?embedded=true`;
+  }
+  // PDFs and other files — use Google's viewer
+  if (file.mimeType === 'application/pdf' || !file.mimeType.startsWith('application/vnd.google-apps.')) {
+    if (file.webViewLink) {
+      return `https://drive.google.com/file/d/${file.id}/preview`;
+    }
   }
   return null;
+}
+
+export function getEditUrl(file: DriveFile): string | null {
+  if (file.mimeType === 'application/vnd.google-apps.document') {
+    return `https://docs.google.com/document/d/${file.id}/edit`;
+  }
+  if (file.mimeType === 'application/vnd.google-apps.spreadsheet') {
+    return `https://docs.google.com/spreadsheets/d/${file.id}/edit`;
+  }
+  if (file.mimeType === 'application/vnd.google-apps.presentation') {
+    return `https://docs.google.com/presentation/d/${file.id}/edit`;
+  }
+  if (file.mimeType === 'application/vnd.google-apps.form') {
+    return `https://docs.google.com/forms/d/${file.id}/edit`;
+  }
+  return file.webViewLink || null;
 }
 
 export function isGoogleDoc(mimeType: string): boolean {

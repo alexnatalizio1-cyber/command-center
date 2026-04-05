@@ -9,9 +9,11 @@ import {
   Trash2,
   Maximize2,
   Minimize2,
+  Edit3,
+  Eye,
 } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
-import { DriveFile, getFileEmoji, getPreviewUrl, isGoogleDoc, formatFileSize } from './driveUtils';
+import { DriveFile, getFileEmoji, getPreviewUrl, getEditUrl, isGoogleDoc, formatFileSize } from './driveUtils';
 
 interface FilePreviewProps {
   file: DriveFile;
@@ -29,31 +31,42 @@ export default function FilePreview({
   onRename,
 }: FilePreviewProps) {
   const [iframeLoaded, setIframeLoaded] = useState(false);
-  const [fullscreen, setFullscreen] = useState(isGoogleDoc(file.mimeType));
+  const [fullscreen, setFullscreen] = useState(true);
+  const [mode, setMode] = useState<'view' | 'edit'>('view');
 
   const previewUrl = getPreviewUrl(file);
+  const editUrl = getEditUrl(file);
   const isImage = file.mimeType.startsWith('image/');
-  const isPdf = file.mimeType === 'application/pdf';
   const isEditable = isGoogleDoc(file.mimeType);
 
+  // For edit mode, we load the full Google editor URL in the iframe
+  // This works because the user is signed into Google in the same browser
+  const currentUrl = mode === 'edit' && editUrl ? editUrl : previewUrl;
+
   const renderPreviewContent = () => {
-    if (previewUrl) {
+    if (currentUrl) {
       return (
         <div className="relative flex-1 min-h-0">
           {!iframeLoaded && (
-            <div className="absolute inset-0 flex items-center justify-center">
-              <div className="text-gray-400 dark:text-zinc-500 text-sm">
-                <div className="animate-pulse">Loading {isEditable ? 'editor' : 'preview'}...</div>
+            <div className="absolute inset-0 flex items-center justify-center bg-surface-1">
+              <div className="text-center">
+                <div className="animate-pulse text-gray-400 dark:text-zinc-500 text-sm mb-2">
+                  Loading {mode === 'edit' ? 'editor' : 'document'}...
+                </div>
+                <p className="text-[11px] text-gray-300 dark:text-zinc-600">
+                  {mode === 'edit' ? 'Opening Google editor' : 'Loading preview'}
+                </p>
               </div>
             </div>
           )}
           <iframe
-            src={previewUrl}
+            key={mode + file.id}
+            src={currentUrl}
             className="w-full h-full border-0"
-            style={{ borderRadius: fullscreen ? 0 : 8 }}
             onLoad={() => setIframeLoaded(true)}
             title={file.name}
             allow="clipboard-read; clipboard-write"
+            sandbox="allow-same-origin allow-scripts allow-popups allow-forms allow-modals allow-popups-to-escape-sandbox"
           />
         </div>
       );
@@ -61,23 +74,11 @@ export default function FilePreview({
 
     if (isImage) {
       return (
-        <div className="flex-1 min-h-0 flex items-center justify-center p-4">
+        <div className="flex-1 min-h-0 flex items-center justify-center p-4 bg-black/5 dark:bg-black/20">
           <img
-            src={`/api/drive/${file.id}?download=true`}
+            src={`https://drive.google.com/thumbnail?id=${file.id}&sz=w1200`}
             alt={file.name}
-            className="max-w-full max-h-full object-contain rounded-lg"
-          />
-        </div>
-      );
-    }
-
-    if (isPdf && file.webViewLink) {
-      return (
-        <div className="relative flex-1 min-h-0">
-          <iframe
-            src={file.webViewLink}
-            className="w-full h-full border-0 rounded-lg"
-            title={file.name}
+            className="max-w-full max-h-full object-contain rounded-lg shadow-lg"
           />
         </div>
       );
@@ -121,23 +122,47 @@ export default function FilePreview({
         className={`bg-surface-1 border border-border shadow-2xl flex flex-col transition-all duration-300 ${
           fullscreen
             ? 'fixed inset-0 rounded-none'
-            : 'rounded-2xl w-full max-w-5xl h-[85vh] mx-4'
+            : 'rounded-2xl w-full max-w-6xl h-[90vh] mx-4'
         }`}
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-4 py-2.5 border-b border-border flex-shrink-0">
+        <div className="flex items-center justify-between px-4 py-2 border-b border-border flex-shrink-0">
           <div className="flex items-center gap-2.5 min-w-0">
             <span className="text-lg">{getFileEmoji(file.mimeType)}</span>
             <h2 className="text-sm font-semibold text-gray-800 dark:text-zinc-200 truncate">
               {file.name}
             </h2>
-            {isEditable && (
-              <span className="text-[10px] font-medium text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-500/10 px-2 py-0.5 rounded-full">
-                Editing
-              </span>
-            )}
           </div>
+
           <div className="flex items-center gap-0.5 flex-shrink-0">
+            {/* View/Edit toggle for Google Docs */}
+            {isEditable && (
+              <div className="flex items-center bg-surface-2 rounded-lg p-0.5 mr-2">
+                <button
+                  onClick={() => { setMode('view'); setIframeLoaded(false); }}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
+                    mode === 'view'
+                      ? 'bg-surface-1 text-gray-800 dark:text-zinc-200 shadow-sm'
+                      : 'text-gray-400 dark:text-zinc-500 hover:text-gray-600 dark:hover:text-zinc-300'
+                  }`}
+                >
+                  <Eye className="w-3 h-3" />
+                  View
+                </button>
+                <button
+                  onClick={() => { setMode('edit'); setIframeLoaded(false); }}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
+                    mode === 'edit'
+                      ? 'bg-accent text-white shadow-sm'
+                      : 'text-gray-400 dark:text-zinc-500 hover:text-gray-600 dark:hover:text-zinc-300'
+                  }`}
+                >
+                  <Edit3 className="w-3 h-3" />
+                  Edit
+                </button>
+              </div>
+            )}
+
             {file.webViewLink && (
               <a
                 href={file.webViewLink}
@@ -159,7 +184,7 @@ export default function FilePreview({
               <Trash2 className="w-3.5 h-3.5" />
             </button>
             <div className="w-px h-5 bg-border mx-1" />
-            <button onClick={() => setFullscreen(!fullscreen)} className="btn-ghost p-2" title={fullscreen ? 'Exit fullscreen' : 'Fullscreen'}>
+            <button onClick={() => setFullscreen(!fullscreen)} className="btn-ghost p-2" title={fullscreen ? 'Windowed' : 'Fullscreen'}>
               {fullscreen ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
             </button>
             <button onClick={onClose} className="btn-ghost p-2" title="Close">

@@ -18,6 +18,7 @@ import GmailFullView from '@/components/gmail/GmailFullView';
 import CalendarFullView from '@/components/calendar/CalendarFullView';
 import DriveFullView from '@/components/drive/DriveFullView';
 import PinHighPanel from '@/components/PinHighPanel';
+import WeeklyFocus from '@/components/WeeklyFocus';
 
 type View = 'dashboard' | 'ai-hub' | 'gmail' | 'calendar' | 'drive' | 'notes' | 'tasks' | 'bookmarks' | 'settings';
 
@@ -44,18 +45,22 @@ export default function Home() {
       case 'dashboard':
         return (
           <div className="animate-fade-in space-y-6">
-            {/* Hero: Greeting + Search */}
+            {/* Hero: Greeting + Weekly Focus + Search */}
             <div className="grid grid-cols-1 lg:grid-cols-5 gap-5">
-              <div className="lg:col-span-2 space-y-1">
-                <h2 className="text-[26px] font-bold text-gray-900 dark:text-white tracking-tight leading-tight">
-                  {greeting},{' '}
-                  <span className="bg-gradient-to-r from-accent to-violet-500 bg-clip-text text-transparent">
-                    {session?.user?.name?.split(' ')[0] || 'there'}
-                  </span>
-                </h2>
-                <p className="text-gray-400 dark:text-zinc-500 text-sm">Here&apos;s your day at a glance</p>
-                <div className="pt-3">
-                  <ClockWidget />
+              <div className="lg:col-span-2 space-y-4">
+                <div>
+                  <h2 className="text-[26px] font-bold text-gray-900 dark:text-white tracking-tight leading-tight">
+                    {greeting},{' '}
+                    <span className="bg-gradient-to-r from-accent to-violet-500 bg-clip-text text-transparent">
+                      {session?.user?.name?.split(' ')[0] || 'there'}
+                    </span>
+                  </h2>
+                  <div className="mt-3">
+                    <ClockWidget />
+                  </div>
+                </div>
+                <div className="rounded-2xl bg-surface-1 border border-border p-4" style={{ boxShadow: 'var(--shadow-card)' }}>
+                  <WeeklyFocus />
                 </div>
               </div>
               <div className="lg:col-span-3 space-y-3">

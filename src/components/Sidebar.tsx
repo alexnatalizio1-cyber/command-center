@@ -18,6 +18,7 @@ import {
   Moon,
   Command,
   Megaphone,
+  Settings,
 } from 'lucide-react';
 
 type View =
@@ -50,6 +51,7 @@ const NAV_ITEMS: { id: View; label: string; icon: any; section?: string; color?:
   { id: 'notes', label: 'Notes', icon: StickyNote, color: '#F59E0B' },
   { id: 'tasks', label: 'Tasks', icon: CheckSquare, color: '#10B981' },
   { id: 'bookmarks', label: 'Bookmarks', icon: Bookmark, color: '#8B5CF6' },
+  { id: 'settings', label: 'Settings', icon: Settings, section: 'System', color: '#6B7280' },
 ];
 
 export default function Sidebar({ currentView, onViewChange, user, onSignIn, onSignOut }: SidebarProps) {

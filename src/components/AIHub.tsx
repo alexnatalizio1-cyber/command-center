@@ -1,160 +1,183 @@
 'use client';
 
 import { useState } from 'react';
-import { ExternalLink, Maximize2, Minimize2 } from 'lucide-react';
+import {
+  ExternalLink,
+  Terminal,
+  FileText,
+  MessageSquare,
+  Zap,
+  Video,
+  Clock,
+  Send,
+} from 'lucide-react';
 
-interface AITool {
+interface AIToolCard {
   id: string;
   name: string;
-  description: string;
-  url: string;
-  icon: string;
-  color: string;
-  lightBg: string;
+  role: string;
+  accent: string;
+  letter: string;
+  note?: string;
+  url?: string;
+  actions: { label: string; icon: any; action: 'link' | 'chat' | 'digest' | 'terminal' | 'docs' }[];
 }
 
-const AI_TOOLS: AITool[] = [
+const AI_TOOLS: AIToolCard[] = [
   {
     id: 'claude',
     name: 'Claude',
-    description: "Anthropic's AI assistant",
+    role: 'Strategy & Analysis',
+    accent: '#A855F7',
+    letter: 'C',
     url: 'https://claude.ai',
-    icon: '/icons/claude.svg',
-    color: 'from-amber-500/20 to-orange-500/20',
-    lightBg: 'from-amber-50 to-orange-50 dark:from-amber-500/20 dark:to-orange-500/20',
+    actions: [
+      { label: 'Open Claude', icon: ExternalLink, action: 'link' },
+      { label: 'New conversation', icon: MessageSquare, action: 'link' },
+    ],
   },
   {
-    id: 'chatgpt',
-    name: 'ChatGPT',
-    description: "OpenAI's conversational AI",
-    url: 'https://chat.openai.com',
-    icon: '/icons/chatgpt.svg',
-    color: 'from-emerald-500/20 to-green-500/20',
-    lightBg: 'from-emerald-50 to-green-50 dark:from-emerald-500/20 dark:to-green-500/20',
+    id: 'claude-code',
+    name: 'Claude Code',
+    role: 'Builder',
+    accent: '#4ADE6B',
+    letter: 'CC',
+    note: 'CLI Tool',
+    actions: [
+      { label: 'Open Terminal', icon: Terminal, action: 'terminal' },
+      { label: 'View docs', icon: FileText, action: 'docs' },
+    ],
   },
   {
     id: 'gemini',
     name: 'Gemini',
-    description: "Google's AI model",
-    url: 'https://gemini.google.com',
-    icon: '/icons/gemini.svg',
-    color: 'from-blue-500/20 to-cyan-500/20',
-    lightBg: 'from-blue-50 to-cyan-50 dark:from-blue-500/20 dark:to-cyan-500/20',
+    role: 'Agent',
+    accent: '#4285F4',
+    letter: 'G',
+    actions: [
+      { label: 'Open Chat', icon: MessageSquare, action: 'chat' },
+      { label: 'Weekly Digest', icon: Zap, action: 'digest' },
+    ],
   },
   {
-    id: 'perplexity',
-    name: 'Perplexity',
-    description: 'AI-powered search engine',
-    url: 'https://perplexity.ai',
-    icon: '/icons/perplexity.svg',
-    color: 'from-cyan-500/20 to-teal-500/20',
-    lightBg: 'from-cyan-50 to-teal-50 dark:from-cyan-500/20 dark:to-teal-500/20',
+    id: 'heygen',
+    name: 'HeyGen',
+    role: 'Video Production',
+    accent: '#F97316',
+    letter: 'H',
+    url: 'https://heygen.com',
+    actions: [
+      { label: 'Open HeyGen', icon: Video, action: 'link' },
+      { label: 'Create Avatar', icon: ExternalLink, action: 'link' },
+    ],
   },
   {
-    id: 'copilot',
-    name: 'GitHub Copilot',
-    description: 'AI pair programmer',
-    url: 'https://github.com/features/copilot',
-    icon: '/icons/copilot.svg',
-    color: 'from-gray-500/20 to-zinc-500/20',
-    lightBg: 'from-gray-50 to-slate-50 dark:from-gray-500/20 dark:to-zinc-500/20',
-  },
-  {
-    id: 'midjourney',
-    name: 'Midjourney',
-    description: 'AI image generation',
-    url: 'https://midjourney.com',
-    icon: '/icons/midjourney.svg',
-    color: 'from-indigo-500/20 to-blue-500/20',
-    lightBg: 'from-indigo-50 to-blue-50 dark:from-indigo-500/20 dark:to-blue-500/20',
+    id: 'buffer',
+    name: 'Buffer',
+    role: 'Publishing',
+    accent: '#14B8A6',
+    letter: 'B',
+    url: 'https://buffer.com',
+    actions: [
+      { label: 'Open Buffer', icon: Send, action: 'link' },
+      { label: 'Schedule Post', icon: Clock, action: 'link' },
+    ],
   },
 ];
 
-export default function AIHub() {
-  const [activeTool, setActiveTool] = useState<string | null>(null);
-  const [fullscreen, setFullscreen] = useState(false);
+interface AIHubProps {
+  onOpenChat?: () => void;
+  onOpenDigest?: () => void;
+}
 
-  if (activeTool) {
-    const tool = AI_TOOLS.find((t) => t.id === activeTool)!;
-    return (
-      <div className={`${fullscreen ? 'fixed inset-0 z-50 bg-surface-0 p-4' : ''} animate-fade-in`}>
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-3">
-            <button onClick={() => setActiveTool(null)} className="btn-ghost text-sm">
-              ← Back
-            </button>
-            <img src={tool.icon} alt={tool.name} className="w-6 h-6" />
-            <h2 className="text-lg font-semibold text-gray-900 dark:text-white">{tool.name}</h2>
-          </div>
-          <div className="flex items-center gap-2">
-            <button onClick={() => setFullscreen(!fullscreen)} className="btn-ghost p-2">
-              {fullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
-            </button>
-            <a href={tool.url} target="_blank" rel="noopener noreferrer" className="btn-ghost p-2">
-              <ExternalLink className="w-4 h-4" />
-            </a>
-          </div>
-        </div>
-        <div className={`iframe-container ${fullscreen ? 'h-[calc(100vh-80px)]' : 'h-[calc(100vh-220px)]'}`}>
-          <iframe
-            src={tool.url}
-            title={tool.name}
-            className="w-full h-full rounded-xl border border-border"
-            sandbox="allow-same-origin allow-scripts allow-popups allow-forms allow-modals"
-          />
-        </div>
-      </div>
-    );
-  }
+export default function AIHub({ onOpenChat, onOpenDigest }: AIHubProps) {
+  const [onlineStatuses] = useState<Record<string, boolean>>({
+    claude: true,
+    'claude-code': true,
+    gemini: true,
+    heygen: true,
+    buffer: true,
+  });
+
+  const handleAction = (tool: AIToolCard, action: AIToolCard['actions'][number]) => {
+    switch (action.action) {
+      case 'link':
+        if (tool.url) {
+          window.open(tool.url, '_blank', 'noopener,noreferrer');
+        }
+        break;
+      case 'chat':
+        onOpenChat?.();
+        break;
+      case 'digest':
+        onOpenDigest?.();
+        break;
+      case 'terminal':
+        // Could open terminal instructions or docs
+        window.open('https://docs.anthropic.com/en/docs/claude-code', '_blank', 'noopener,noreferrer');
+        break;
+      case 'docs':
+        window.open('https://docs.anthropic.com/en/docs/claude-code', '_blank', 'noopener,noreferrer');
+        break;
+    }
+  };
 
   return (
     <div className="animate-fade-in">
       <div className="flex items-center justify-between mb-8">
         <div>
-          <h2 className="text-xl font-bold text-gray-900 dark:text-white">🤖 AI Hub</h2>
-          <p className="text-sm text-gray-500 dark:text-zinc-500 mt-1">Quick access to all your AI tools</p>
+          <h2 className="text-xl font-bold text-gray-900 dark:text-white">PinHigh AI System</h2>
+          <p className="text-sm text-gray-500 dark:text-zinc-500 mt-1">Your AI-powered team for building PinHigh</p>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
         {AI_TOOLS.map((tool) => {
+          const isOnline = onlineStatuses[tool.id] ?? false;
+
           return (
-            <div
-              key={tool.id}
-              className="card cursor-pointer group hover:border-accent/30"
-              onClick={() => setActiveTool(tool.id)}
-            >
+            <div key={tool.id} className="card group">
               <div className="flex items-start gap-4">
-                <div className={`w-14 h-14 rounded-xl bg-gradient-to-br ${tool.lightBg} flex items-center justify-center flex-shrink-0 shadow-sm`}>
-                  <img src={tool.icon} alt={tool.name} className="w-7 h-7" />
+                {/* Icon circle */}
+                <div
+                  className="w-12 h-12 rounded-full flex items-center justify-center flex-shrink-0 text-white font-bold text-sm"
+                  style={{ backgroundColor: tool.accent }}
+                >
+                  {tool.letter}
                 </div>
                 <div className="flex-1 min-w-0">
-                  <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
                     <h3 className="font-semibold text-gray-900 dark:text-white">{tool.name}</h3>
-                    <ExternalLink className="w-4 h-4 text-gray-300 dark:text-zinc-600 group-hover:text-gray-500 dark:group-hover:text-zinc-400 transition-colors" />
+                    <span
+                      className="w-2 h-2 rounded-full flex-shrink-0"
+                      style={{ backgroundColor: isOnline ? '#22c55e' : '#ef4444' }}
+                      title={isOnline ? 'Online' : 'Offline'}
+                    />
                   </div>
-                  <p className="text-sm text-gray-500 dark:text-zinc-500 mt-0.5">{tool.description}</p>
+                  <p className="text-sm text-gray-500 dark:text-zinc-400 mt-0.5">{tool.role}</p>
+                  {tool.note && (
+                    <span className="inline-block mt-1 text-[10px] font-medium px-2 py-0.5 rounded-full bg-surface-2 text-gray-500 dark:text-zinc-400">
+                      {tool.note}
+                    </span>
+                  )}
                 </div>
               </div>
-              <div className="mt-5 flex gap-2">
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setActiveTool(tool.id);
-                  }}
-                  className="text-xs bg-surface-2 text-gray-700 dark:text-zinc-300 px-4 py-2 rounded-xl hover:bg-surface-3 transition-colors font-medium"
-                >
-                  Open inline
-                </button>
-                <a
-                  href={tool.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  onClick={(e) => e.stopPropagation()}
-                  className="text-xs bg-surface-2 text-gray-700 dark:text-zinc-300 px-4 py-2 rounded-xl hover:bg-surface-3 transition-colors font-medium"
-                >
-                  New tab ↗
-                </a>
+
+              {/* Quick Actions */}
+              <div className="mt-4 flex gap-2">
+                {tool.actions.map((action) => {
+                  const Icon = action.icon;
+                  return (
+                    <button
+                      key={action.label}
+                      onClick={() => handleAction(tool, action)}
+                      className="flex-1 text-xs bg-surface-2 text-gray-700 dark:text-zinc-300 px-3 py-2.5 rounded-xl hover:bg-surface-3 transition-colors font-medium flex items-center justify-center gap-1.5 min-h-[44px]"
+                    >
+                      <Icon className="w-3.5 h-3.5" />
+                      {action.label}
+                    </button>
+                  );
+                })}
               </div>
             </div>
           );

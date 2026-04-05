@@ -25,11 +25,35 @@ interface SheetsData {
   };
 }
 
+function parseSheetRows(rows: string[][]): SheetsData | null {
+  if (!rows || rows.length === 0) return null;
+
+  const data: SheetsData = {
+    waitlist: 0,
+    activeUsers: 0,
+    mrr: 0,
+    roundsLogged: 0,
+  };
+
+  for (const row of rows) {
+    const label = (row[0] || '').toLowerCase();
+    const value = parseFloat((row[1] || '0').replace(/[^0-9.-]/g, '')) || 0;
+
+    if (label.includes('waitlist')) data.waitlist = value;
+    else if (label.includes('active user')) data.activeUsers = value;
+    else if (label.includes('mrr') || label.includes('revenue')) data.mrr = value;
+    else if (label.includes('rounds') || label.includes('logged')) data.roundsLogged = value;
+  }
+
+  return data;
+}
+
 export default function SheetsPanel() {
   const { data: session } = useSession();
   const [data, setData] = useState<SheetsData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
+  const [noSheetId, setNoSheetId] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
   const fetchData = useCallback(async (isRefresh = false) => {
@@ -39,12 +63,40 @@ export default function SheetsPanel() {
       return;
     }
     if (isRefresh) setRefreshing(true);
+
+    // Check for custom sheet ID in localStorage
+    let sheetId = '';
     try {
-      const res = await fetch('/api/sheets');
-      if (!res.ok) throw new Error('Failed to fetch');
+      const stored = localStorage.getItem('pinhigh-sheet-id');
+      if (stored) sheetId = JSON.parse(stored);
+    } catch {
+      // silent
+    }
+
+    try {
+      const params = new URLSearchParams();
+      if (sheetId) params.set('spreadsheetId', sheetId);
+      params.set('range', 'Metrics!A:B');
+
+      const res = await fetch(`/api/sheets?${params.toString()}`);
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        if (res.status === 400 && errData.error?.includes('No spreadsheet ID')) {
+          setNoSheetId(true);
+          setError(true);
+          return;
+        }
+        throw new Error('Failed to fetch');
+      }
       const json = await res.json();
-      setData(json);
-      setError(false);
+      const parsed = parseSheetRows(json.rows || []);
+      if (parsed && (parsed.waitlist || parsed.activeUsers || parsed.mrr || parsed.roundsLogged)) {
+        setData(parsed);
+        setError(false);
+        setNoSheetId(false);
+      } else {
+        setError(true);
+      }
     } catch {
       setError(true);
     } finally {
@@ -97,7 +149,13 @@ export default function SheetsPanel() {
           <h3 className="text-sm font-semibold text-gray-800 dark:text-zinc-200">PinHigh Metrics</h3>
         </div>
         <div className="text-center py-6">
-          <p className="text-sm text-gray-400 dark:text-zinc-500">Connect Google Sheets in Settings</p>
+          <p className="text-sm text-gray-400 dark:text-zinc-500">
+            {noSheetId
+              ? 'No Sheet ID configured. Add one in Settings.'
+              : !session
+                ? 'Sign in to view PinHigh metrics.'
+                : 'Could not load metrics. Check your Sheet ID in Settings.'}
+          </p>
         </div>
       </div>
     );

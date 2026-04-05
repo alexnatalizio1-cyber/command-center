@@ -62,7 +62,7 @@ export default function Sidebar({ currentView, onViewChange, user, onSignIn, onS
   useEffect(() => setMounted(true), []);
 
   return (
-    <aside className="w-[260px] h-screen bg-surface-1 border-r border-border flex flex-col fixed left-0 top-0 z-30">
+    <aside className="hidden md:flex w-[260px] h-screen bg-surface-1 border-r border-border flex-col fixed left-0 top-0 z-30">
       {/* Logo + Theme Toggle */}
       <div className="px-5 py-4 border-b border-border">
         <div className="flex items-center justify-between">

@@ -378,6 +378,21 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Please sign in to use the AI agent.' }, { status: 401 });
     }
 
+    // Handle Gemini API rate limits and specific errors
+    if (message.includes('429') || message.toLowerCase().includes('rate limit') || message.toLowerCase().includes('quota')) {
+      return NextResponse.json(
+        { error: 'AI rate limit reached. Please wait a moment and try again.' },
+        { status: 429 },
+      );
+    }
+
+    if (message.includes('API key') || message.includes('GEMINI_API_KEY')) {
+      return NextResponse.json(
+        { error: 'AI service is not configured. Please check the Gemini API key.' },
+        { status: 503 },
+      );
+    }
+
     return NextResponse.json(
       { error: 'The AI agent encountered an issue. Please try again.' },
       { status: 500 },

@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useSession, signIn, signOut } from 'next-auth/react';
-import { ArrowRight, ArrowUpRight } from 'lucide-react';
+import { ArrowRight, ArrowUpRight, Menu, X as XIcon, Command } from 'lucide-react';
 import Sidebar from '@/components/Sidebar';
 import SearchBar from '@/components/SearchBar';
 import ClockWidget from '@/components/ClockWidget';
@@ -42,6 +42,7 @@ export default function Home() {
   const [geminiEnabled, setGeminiEnabled] = useState(true);
   const [contextCounts, setContextCounts] = useState({ emails: 0, events: 0, tasks: 0, notes: 0 });
   const [refreshKey, setRefreshKey] = useState(0);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const isAuth = !!session;
 
   useEffect(() => {
@@ -84,7 +85,10 @@ export default function Home() {
 
   const handleOpenDigest = useCallback(() => {
     setCurrentView('dashboard');
-    // Digest is visible on the dashboard
+    // Scroll to digest after view renders
+    setTimeout(() => {
+      document.getElementById('weekly-digest-section')?.scrollIntoView({ behavior: 'smooth' });
+    }, 100);
   }, []);
 
   const renderView = () => {
@@ -179,7 +183,7 @@ export default function Home() {
             </div>
 
             {/* Sheets + Weekly Digest */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+            <div id="weekly-digest-section" className="grid grid-cols-1 lg:grid-cols-2 gap-5">
               <SheetsPanel />
               <WeeklyDigest />
             </div>
@@ -217,7 +221,54 @@ export default function Home() {
         onSignIn={() => signIn('google')}
         onSignOut={() => signOut()}
       />
-      <main className="flex-1 ml-[260px] p-8 lg:p-10">
+      {/* Mobile Header */}
+      <div className="md:hidden fixed top-0 left-0 right-0 z-40 bg-surface-1 border-b border-border px-4 py-3 flex items-center justify-between">
+        <div className="flex items-center gap-2.5">
+          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-accent to-violet-500 flex items-center justify-center">
+            <Command className="w-4 h-4 text-white" />
+          </div>
+          <span className="text-[15px] font-semibold text-gray-900 dark:text-white">Command</span>
+        </div>
+        <button
+          onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+          className="w-11 h-11 rounded-xl hover:bg-surface-2 flex items-center justify-center transition-colors"
+          aria-label={mobileMenuOpen ? 'Close menu' : 'Open menu'}
+        >
+          {mobileMenuOpen ? <XIcon className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+        </button>
+      </div>
+
+      {/* Mobile Nav Dropdown */}
+      {mobileMenuOpen && (
+        <>
+          <div className="md:hidden fixed inset-0 bg-black/40 z-30" onClick={() => setMobileMenuOpen(false)} />
+          <div className="md:hidden fixed top-[60px] left-0 right-0 z-30 bg-surface-1 border-b border-border p-3 animate-slide-up max-h-[70vh] overflow-y-auto">
+            {(['dashboard', 'ai-hub', 'gmail', 'calendar', 'drive', 'content', 'notes', 'tasks', 'bookmarks', 'settings'] as View[]).map((view) => (
+              <button
+                key={view}
+                onClick={() => { setCurrentView(view); setMobileMenuOpen(false); }}
+                className={`w-full text-left px-4 py-3 rounded-xl text-sm font-medium transition-colors min-h-[44px] ${
+                  currentView === view
+                    ? 'bg-surface-2 text-gray-900 dark:text-white'
+                    : 'text-gray-500 dark:text-zinc-400 hover:bg-surface-2'
+                }`}
+              >
+                {view.charAt(0).toUpperCase() + view.slice(1).replace('-', ' ')}
+              </button>
+            ))}
+            {!isAuth && (
+              <button
+                onClick={() => { signIn('google'); setMobileMenuOpen(false); }}
+                className="w-full mt-2 flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-accent/10 text-accent text-sm font-medium min-h-[44px]"
+              >
+                Sign in with Google
+              </button>
+            )}
+          </div>
+        </>
+      )}
+
+      <main className="flex-1 ml-0 md:ml-[260px] pt-[72px] md:pt-0 p-4 md:p-8 lg:p-10">
         <div className="max-w-[1280px] mx-auto">
           {renderView()}
         </div>

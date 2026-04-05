@@ -70,9 +70,18 @@ export default function WeeklyDigest() {
       if (!res.ok) throw new Error('Failed to generate digest');
       const data = await res.json();
 
+      // API returns `recommendations` with `action` field; normalize to `cards` with `actionItem`
+      const rawCards = data.cards || data.recommendations || [];
+      const normalizedCards = rawCards.map((c: DigestCard & { action?: string }) => ({
+        type: c.type || 'content',
+        title: c.title || '',
+        description: c.description || '',
+        actionItem: c.actionItem || c.action || '',
+      }));
+
       const newDigest: DigestData = {
-        cards: data.cards || data.recommendations || [],
-        generatedAt: new Date().toISOString(),
+        cards: normalizedCards,
+        generatedAt: data.generatedAt || new Date().toISOString(),
       };
 
       setDigest(newDigest);

@@ -53,6 +53,8 @@ export default function GeminiChat({ isOpen, onClose, onUiRefresh, contextCounts
   const [isRecording, setIsRecording] = useState(false);
   // hasPulse could be exposed to parent for floating button animation
   const [, setHasPulse] = useState(false);
+  const [voiceSupported, setVoiceSupported] = useState(true);
+  const [voiceError, setVoiceError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const recognitionRef = useRef<any>(null);
@@ -162,12 +164,13 @@ export default function GeminiChat({ isOpen, onClose, onUiRefresh, contextCounts
       };
       setMessages((prev) => [...prev, assistantMsg]);
 
-      // Add function results if any
-      if (data.actions && data.actions.length > 0) {
+      // Add function results if any (API returns `functionCalls`)
+      const fnCalls = data.functionCalls || data.actions || [];
+      if (fnCalls.length > 0) {
         const actionMsg: Message = {
           id: (Date.now() + 2).toString(),
           role: 'function',
-          content: data.actions.map((a: any) => a.summary || a.description || JSON.stringify(a)).join('\n'),
+          content: fnCalls.map((a: any) => a.summary || a.name || a.description || JSON.stringify(a)).join('\n'),
           timestamp: new Date().toISOString(),
         };
         setMessages((prev) => [...prev, actionMsg]);
@@ -198,10 +201,24 @@ export default function GeminiChat({ isOpen, onClose, onUiRefresh, contextCounts
     sendMessage(input);
   };
 
+  // Detect voice support on mount
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const SR = (window as any).webkitSpeechRecognition || (window as any).SpeechRecognition;
+      setVoiceSupported(!!SR);
+    }
+  }, []);
+
   const startVoiceInput = () => {
+    setVoiceError(null);
     try {
       const SpeechRecognition = (window as any).webkitSpeechRecognition || (window as any).SpeechRecognition;
-      if (!SpeechRecognition) return;
+      if (!SpeechRecognition) {
+        setVoiceSupported(false);
+        setVoiceError('Voice input is not supported in this browser.');
+        setTimeout(() => setVoiceError(null), 3000);
+        return;
+      }
 
       const recognition = new SpeechRecognition();
       recognition.continuous = false;
@@ -214,8 +231,14 @@ export default function GeminiChat({ isOpen, onClose, onUiRefresh, contextCounts
         setIsRecording(false);
       };
 
-      recognition.onerror = () => {
+      recognition.onerror = (event: any) => {
         setIsRecording(false);
+        if (event.error === 'not-allowed') {
+          setVoiceError('Microphone access denied. Check browser permissions.');
+        } else {
+          setVoiceError('Voice input failed. Please try again.');
+        }
+        setTimeout(() => setVoiceError(null), 3000);
       };
 
       recognition.onend = () => {
@@ -226,7 +249,8 @@ export default function GeminiChat({ isOpen, onClose, onUiRefresh, contextCounts
       recognition.start();
       setIsRecording(true);
     } catch {
-      // Speech recognition not supported
+      setVoiceError('Voice input is not available.');
+      setTimeout(() => setVoiceError(null), 3000);
     }
   };
 
@@ -286,7 +310,8 @@ export default function GeminiChat({ isOpen, onClose, onUiRefresh, contextCounts
           </div>
           <button
             onClick={onClose}
-            className="w-8 h-8 rounded-lg hover:bg-surface-2 flex items-center justify-center transition-colors"
+            className="w-11 h-11 rounded-lg hover:bg-surface-2 flex items-center justify-center transition-colors"
+            aria-label="Close chat"
           >
             <X className="w-4 h-4 text-gray-400 dark:text-zinc-500" />
           </button>
@@ -393,23 +418,32 @@ export default function GeminiChat({ isOpen, onClose, onUiRefresh, contextCounts
           <div ref={messagesEndRef} />
         </div>
 
+        {/* Voice Error Banner */}
+        {voiceError && (
+          <div className="px-4 py-2 bg-red-500/10 border-t border-red-500/20 flex-shrink-0">
+            <p className="text-xs text-red-500 text-center">{voiceError}</p>
+          </div>
+        )}
+
         {/* Input Area */}
         <form
           onSubmit={handleSubmit}
           className="flex items-center gap-2 px-4 py-3 border-t border-border flex-shrink-0"
         >
-          <button
-            type="button"
-            onClick={isRecording ? stopVoiceInput : startVoiceInput}
-            className={`w-11 h-11 flex-shrink-0 rounded-xl flex items-center justify-center transition-colors ${
-              isRecording
-                ? 'bg-red-500 text-white'
-                : 'hover:bg-surface-2 text-gray-400 dark:text-zinc-500'
-            }`}
-            aria-label={isRecording ? 'Stop recording' : 'Start voice input'}
-          >
-            {isRecording ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
-          </button>
+          {voiceSupported && (
+            <button
+              type="button"
+              onClick={isRecording ? stopVoiceInput : startVoiceInput}
+              className={`w-11 h-11 flex-shrink-0 rounded-xl flex items-center justify-center transition-colors ${
+                isRecording
+                  ? 'bg-red-500 text-white'
+                  : 'hover:bg-surface-2 text-gray-400 dark:text-zinc-500'
+              }`}
+              aria-label={isRecording ? 'Stop recording' : 'Start voice input'}
+            >
+              {isRecording ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+            </button>
+          )}
           <input
             ref={inputRef}
             type="text"

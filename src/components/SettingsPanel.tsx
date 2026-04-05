@@ -33,7 +33,7 @@ export default function SettingsPanel() {
     setTestingSheet(true);
     setSheetTestResult(null);
     try {
-      const res = await fetch(`/api/sheets?sheetId=${encodeURIComponent(sheetId)}`);
+      const res = await fetch(`/api/sheets?spreadsheetId=${encodeURIComponent(sheetId)}`);
       if (res.ok) {
         setSheetTestResult('success');
       } else {

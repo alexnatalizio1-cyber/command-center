@@ -128,26 +128,12 @@ export default function GeminiChat({ isOpen, onClose, onUiRefresh, contextCounts
     setIsLoading(true);
 
     try {
-      // Read tasks and notes from localStorage
-      let tasks: any[] = [];
-      let notes: any[] = [];
-      try {
-        const storedTasks = localStorage.getItem('cc-tasks');
-        if (storedTasks) tasks = JSON.parse(storedTasks);
-        const storedNotes = localStorage.getItem('cc-notes');
-        if (storedNotes) notes = JSON.parse(storedNotes);
-      } catch {
-        // silent
-      }
-
       const res = await fetch('/api/gemini/agent', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           message: text.trim(),
           history: messages.slice(-20).map((m) => ({ role: m.role, content: m.content })),
-          tasks,
-          notes,
         }),
       });
 

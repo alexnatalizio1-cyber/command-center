@@ -62,18 +62,32 @@ export default function Home() {
     }
   }, []);
 
-  // Build context counts from localStorage
+  // Build context counts from APIs
   useEffect(() => {
-    try {
-      const tasks = localStorage.getItem('cc-tasks');
-      const notes = localStorage.getItem('cc-notes');
-      const taskCount = tasks ? JSON.parse(tasks).filter((t: any) => !t.completed).length : 0;
-      const noteCount = notes ? JSON.parse(notes).length : 0;
-      setContextCounts((prev) => ({ ...prev, tasks: taskCount, notes: noteCount }));
-    } catch {
-      // silent
-    }
-  }, [refreshKey]);
+    if (!isAuth) return;
+    const fetchCounts = async () => {
+      try {
+        const [tasksRes, notesRes] = await Promise.allSettled([
+          fetch('/api/tasks'),
+          fetch('/api/notes'),
+        ]);
+        let taskCount = 0;
+        let noteCount = 0;
+        if (tasksRes.status === 'fulfilled' && tasksRes.value.ok) {
+          const data = await tasksRes.value.json();
+          taskCount = (data.tasks || []).filter((t: any) => !t.completed).length;
+        }
+        if (notesRes.status === 'fulfilled' && notesRes.value.ok) {
+          const data = await notesRes.value.json();
+          noteCount = (data.notes || []).length;
+        }
+        setContextCounts((prev) => ({ ...prev, tasks: taskCount, notes: noteCount }));
+      } catch {
+        // silent
+      }
+    };
+    fetchCounts();
+  }, [refreshKey, isAuth]);
 
   const handleUiRefresh = useCallback((panels: string[]) => {
     setRefreshKey((k) => k + 1);

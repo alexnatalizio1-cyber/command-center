@@ -7,8 +7,6 @@ import type { Content, FunctionCall, Part } from '@google/generative-ai';
 interface AgentRequestBody {
   message: string;
   history?: Content[];
-  tasks?: Array<{ id: string; title: string; completed: boolean; priority?: string }>;
-  notes?: Array<{ id: string; title: string; content: string }>;
 }
 
 interface FunctionCallResult {
@@ -22,12 +20,16 @@ type UIRefreshTarget = 'gmail' | 'calendar' | 'drive' | 'tasks' | 'notes' | 'she
 async function fetchLiveContext(baseUrl: string, cookies: string): Promise<{
   emails: string;
   events: string;
+  tasks: string;
+  notes: string;
 }> {
   const headers = { Cookie: cookies };
 
-  const [emailsRes, eventsRes] = await Promise.allSettled([
+  const [emailsRes, eventsRes, tasksRes, notesRes] = await Promise.allSettled([
     fetch(`${baseUrl}/api/gmail?maxResults=5`, { headers }),
     fetch(`${baseUrl}/api/calendar`, { headers }),
+    fetch(`${baseUrl}/api/tasks`, { headers }),
+    fetch(`${baseUrl}/api/notes`, { headers }),
   ]);
 
   let emails = 'No recent emails available.';
@@ -56,44 +58,61 @@ async function fetchLiveContext(baseUrl: string, cookies: string): Promise<{
     }
   }
 
-  return { emails, events };
+  let tasks = 'No tasks tracked.';
+  if (tasksRes.status === 'fulfilled' && tasksRes.value.ok) {
+    const data = await tasksRes.value.json();
+    const taskItems = (data.tasks || []).slice(0, 20);
+    if (taskItems.length > 0) {
+      tasks = taskItems
+        .map((t: { id: string; title: string; completed: boolean; priority: string; listName: string; listId: string }) =>
+          `- [ID: ${t.id}] [List: ${t.listName} (${t.listId})] [${t.completed ? 'DONE' : 'OPEN'}] ${t.title}${t.priority ? ` (${t.priority})` : ''}`
+        )
+        .join('\n');
+    }
+  }
+
+  let notes = 'No recent notes.';
+  if (notesRes.status === 'fulfilled' && notesRes.value.ok) {
+    const data = await notesRes.value.json();
+    const noteItems = (data.notes || []).slice(0, 10);
+    if (noteItems.length > 0) {
+      notes = noteItems
+        .map((n: { id: string; title: string; preview: string }) =>
+          `- [ID: ${n.id}] ${n.title}: ${n.preview || '(empty)'}`)
+        .join('\n');
+    }
+  }
+
+  return { emails, events, tasks, notes };
 }
 
 function buildContextPrompt(
   userName: string,
   userEmail: string,
-  emails: string,
-  events: string,
-  tasks: AgentRequestBody['tasks'],
-  notes: AgentRequestBody['notes'],
+  context: { emails: string; events: string; tasks: string; notes: string },
 ): string {
-  const tasksSummary = tasks && tasks.length > 0
-    ? tasks.map((t) => `- [${t.completed ? 'DONE' : 'OPEN'}] ${t.title}${t.priority ? ` (${t.priority})` : ''}`).join('\n')
-    : 'No tasks tracked.';
-
-  const notesSummary = notes && notes.length > 0
-    ? notes.map((n) => `- ${n.title}: ${n.content.slice(0, 100)}${n.content.length > 100 ? '...' : ''}`).join('\n')
-    : 'No recent notes.';
-
   return `
 --- LIVE CONTEXT ---
 User: ${userName} (${userEmail})
 Date: ${new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
 
 Recent Emails:
-${emails}
+${context.emails}
 
 Upcoming Events:
-${events}
+${context.events}
 
-Open Tasks:
-${tasksSummary}
+Open Tasks (synced with Google Tasks):
+${context.tasks}
 
-Recent Notes:
-${notesSummary}
+Recent Notes (synced with Google Drive):
+${context.notes}
 --- END CONTEXT ---
 
-Use this context to give informed, relevant responses. Reference specific emails, events, or tasks when appropriate.`;
+Use this context to give informed, relevant responses. Reference specific emails, events, or tasks when appropriate.
+When creating tasks, they will be synced to Google Tasks.
+When creating notes, they will be saved as Google Docs.
+For completing tasks, use the task ID from the context above along with the listId.`;
 }
 
 async function executeFunctionCall(
@@ -127,7 +146,6 @@ async function executeFunctionCall(
       }
 
       case 'reply_to_email': {
-        // First fetch the original message to get headers for threading
         const origRes = await fetch(`${baseUrl}/api/gmail/${typedArgs.messageId}`, { headers });
         const origData = await origRes.json();
 
@@ -186,7 +204,6 @@ async function executeFunctionCall(
       }
 
       case 'append_to_drive_file': {
-        // Use Drive API via the existing route - PATCH to update file
         return {
           result: {
             success: false,
@@ -212,41 +229,64 @@ async function executeFunctionCall(
       }
 
       case 'add_task': {
+        const res = await fetch(`${baseUrl}/api/tasks`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            title: typedArgs.title,
+            priority: typedArgs.priority || 'medium',
+            due: typedArgs.dueDate || typedArgs.due || null,
+            taskListId: typedArgs.taskListId || null,
+          }),
+        });
+        const data = await res.json();
         return {
           result: {
-            clientAction: 'add_task',
-            task: {
-              id: `task_${Date.now()}`,
-              title: typedArgs.title,
-              priority: typedArgs.priority || 'medium',
-              dueDate: typedArgs.dueDate || null,
-              completed: false,
-            },
+            success: res.ok,
+            task: data.task,
+            message: res.ok ? `Task "${typedArgs.title}" created in Google Tasks` : 'Failed to create task',
           },
           uiTargets: ['tasks'],
         };
       }
 
       case 'complete_task': {
+        const taskId = typedArgs.taskId as string;
+        const listId = typedArgs.listId as string | undefined;
+        const res = await fetch(`${baseUrl}/api/tasks/${taskId}`, {
+          method: 'PATCH',
+          headers,
+          body: JSON.stringify({
+            status: 'completed',
+            listId: listId || null,
+          }),
+        });
+        const data = await res.json();
         return {
           result: {
-            clientAction: 'complete_task',
-            taskId: typedArgs.taskId,
+            success: res.ok,
+            task: data.task,
+            message: res.ok ? 'Task marked as completed' : 'Failed to complete task',
           },
           uiTargets: ['tasks'],
         };
       }
 
       case 'add_note': {
+        const res = await fetch(`${baseUrl}/api/notes`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            title: typedArgs.title,
+            content: typedArgs.content || '',
+          }),
+        });
+        const data = await res.json();
         return {
           result: {
-            clientAction: 'add_note',
-            note: {
-              id: `note_${Date.now()}`,
-              title: typedArgs.title,
-              content: typedArgs.content,
-              createdAt: new Date().toISOString(),
-            },
+            success: res.ok,
+            note: data.note,
+            message: res.ok ? `Note "${typedArgs.title}" saved to Google Drive` : 'Failed to create note',
           },
           uiTargets: ['notes'],
         };
@@ -288,7 +328,7 @@ export async function POST(req: NextRequest) {
     }
 
     const body = (await req.json()) as AgentRequestBody;
-    const { message, history, tasks, notes } = body;
+    const { message, history } = body;
 
     if (!message || typeof message !== 'string') {
       return NextResponse.json({ error: 'A message is required.' }, { status: 400 });
@@ -300,16 +340,13 @@ export async function POST(req: NextRequest) {
     const baseUrl = `${proto}://${host}`;
     const cookies = req.headers.get('cookie') || '';
 
-    // Fetch live context in parallel
+    // Fetch live context in parallel (now includes tasks and notes from Google APIs)
     const liveContext = await fetchLiveContext(baseUrl, cookies);
 
     const contextPrompt = buildContextPrompt(
       session.user.name || 'Alex',
       session.user.email || '',
-      liveContext.emails,
-      liveContext.events,
-      tasks,
-      notes,
+      liveContext,
     );
 
     // Build conversation history

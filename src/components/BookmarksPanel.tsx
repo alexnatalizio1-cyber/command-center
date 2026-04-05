@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Plus, Trash2, ExternalLink, Search, Folder, Globe, X, ArrowRight } from 'lucide-react';
 import { useLocalStorage } from '@/hooks/useLocalStorage';
 
@@ -13,16 +13,35 @@ interface BookmarkItem {
   createdAt: string;
 }
 
-const DEFAULT_FOLDERS = ['Quick Access', 'Tools', 'Resources', 'Social', 'Other'];
+const DEFAULT_FOLDERS = ['Quick Access', 'PinHigh', 'Tools', 'Resources', 'Social', 'Other'];
+
+const SEED_BOOKMARKS: BookmarkItem[] = [
+  { id: 'seed-1', title: 'PinHigh App', url: 'https://pin-high.vercel.app', folder: 'PinHigh', favicon: 'https://www.google.com/s2/favicons?domain=pin-high.vercel.app&sz=32', createdAt: '2026-04-04T00:00:00Z' },
+  { id: 'seed-2', title: 'Supabase Dashboard', url: 'https://supabase.com/dashboard', folder: 'PinHigh', favicon: 'https://www.google.com/s2/favicons?domain=supabase.com&sz=32', createdAt: '2026-04-04T00:00:00Z' },
+  { id: 'seed-3', title: 'PinHigh GitHub', url: 'https://github.com/alexnatalizio1-cyber/pin-high', folder: 'PinHigh', favicon: 'https://www.google.com/s2/favicons?domain=github.com&sz=32', createdAt: '2026-04-04T00:00:00Z' },
+  { id: 'seed-4', title: 'Vercel Dashboard', url: 'https://vercel.com/dashboard', folder: 'PinHigh', favicon: 'https://www.google.com/s2/favicons?domain=vercel.com&sz=32', createdAt: '2026-04-04T00:00:00Z' },
+  { id: 'seed-5', title: 'Command Center', url: 'https://command-center-wine-alpha.vercel.app', folder: 'Tools', favicon: 'https://www.google.com/s2/favicons?domain=command-center-wine-alpha.vercel.app&sz=32', createdAt: '2026-04-04T00:00:00Z' },
+];
 
 export default function BookmarksPanel({ compact = false }: { compact?: boolean }) {
-  const [bookmarks, setBookmarks] = useLocalStorage<BookmarkItem[]>('cc-bookmarks', []);
+  const [bookmarks, setBookmarks] = useLocalStorage<BookmarkItem[]>('cc-bookmarks', SEED_BOOKMARKS);
   const [search, setSearch] = useState('');
   const [showAdd, setShowAdd] = useState(false);
   const [activeFolder, setActiveFolder] = useState('All');
   const [newTitle, setNewTitle] = useState('');
   const [newUrl, setNewUrl] = useState('');
   const [newFolder, setNewFolder] = useState('Quick Access');
+  const [seeded, setSeeded] = useState(false);
+
+  // One-time seed: merge defaults into existing bookmarks if not already present
+  useEffect(() => {
+    if (seeded) return;
+    const missing = SEED_BOOKMARKS.filter((s) => !bookmarks.some((b) => b.url === s.url));
+    if (missing.length > 0) {
+      setBookmarks((prev) => [...missing, ...prev]);
+    }
+    setSeeded(true);
+  }, [bookmarks, seeded]);
 
   const folders = ['All', ...Array.from(new Set([...DEFAULT_FOLDERS, ...bookmarks.map((b) => b.folder)]))];
 

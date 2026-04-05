@@ -17,6 +17,7 @@ import BookmarksPanel from '@/components/BookmarksPanel';
 import GmailFullView from '@/components/gmail/GmailFullView';
 import CalendarFullView from '@/components/calendar/CalendarFullView';
 import DriveFullView from '@/components/drive/DriveFullView';
+import PinHighPanel from '@/components/PinHighPanel';
 
 type View = 'dashboard' | 'ai-hub' | 'gmail' | 'calendar' | 'drive' | 'notes' | 'tasks' | 'bookmarks' | 'settings';
 
@@ -86,6 +87,10 @@ export default function Home() {
               ))}
             </div>
 
+            {/* PinHigh + AI */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+              <PinHighPanel />
+
             {/* AI Quick Access */}
             <div className="card">
               <div className="flex items-center justify-between mb-4">
@@ -118,6 +123,7 @@ export default function Home() {
                   </a>
                 ))}
               </div>
+            </div>
             </div>
           </div>
         );

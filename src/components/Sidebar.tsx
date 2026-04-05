@@ -17,6 +17,7 @@ import {
   Sun,
   Moon,
   Command,
+  Megaphone,
 } from 'lucide-react';
 
 type View =
@@ -25,6 +26,7 @@ type View =
   | 'gmail'
   | 'calendar'
   | 'drive'
+  | 'content'
   | 'notes'
   | 'tasks'
   | 'bookmarks'
@@ -44,7 +46,8 @@ const NAV_ITEMS: { id: View; label: string; icon: any; section?: string; color?:
   { id: 'gmail', label: 'Gmail', icon: Mail, section: 'Google', color: '#EA4335' },
   { id: 'calendar', label: 'Calendar', icon: Calendar, color: '#4285F4' },
   { id: 'drive', label: 'Drive', icon: HardDrive, color: '#0F9D58' },
-  { id: 'notes', label: 'Notes', icon: StickyNote, section: 'Workspace', color: '#F59E0B' },
+  { id: 'content', label: 'Content', icon: Megaphone, section: 'Workspace', color: '#EC4899' },
+  { id: 'notes', label: 'Notes', icon: StickyNote, color: '#F59E0B' },
   { id: 'tasks', label: 'Tasks', icon: CheckSquare, color: '#10B981' },
   { id: 'bookmarks', label: 'Bookmarks', icon: Bookmark, color: '#8B5CF6' },
 ];

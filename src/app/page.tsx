@@ -19,8 +19,9 @@ import CalendarFullView from '@/components/calendar/CalendarFullView';
 import DriveFullView from '@/components/drive/DriveFullView';
 import PinHighPanel from '@/components/PinHighPanel';
 import WeeklyFocus from '@/components/WeeklyFocus';
+import ContentCalendar from '@/components/ContentCalendar';
 
-type View = 'dashboard' | 'ai-hub' | 'gmail' | 'calendar' | 'drive' | 'notes' | 'tasks' | 'bookmarks' | 'settings';
+type View = 'dashboard' | 'ai-hub' | 'gmail' | 'calendar' | 'drive' | 'content' | 'notes' | 'tasks' | 'bookmarks' | 'settings';
 
 function getGreeting() {
   const hour = new Date().getHours();
@@ -140,6 +141,8 @@ export default function Home() {
         return <CalendarFullView />;
       case 'drive':
         return <DriveFullView />;
+      case 'content':
+        return <ContentCalendar />;
       case 'notes':
         return <NotesPanel />;
       case 'tasks':

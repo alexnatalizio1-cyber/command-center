@@ -35,15 +35,22 @@ export function getFileEmoji(mimeType: string): string {
 
 export function getPreviewUrl(file: DriveFile): string | null {
   if (file.mimeType === 'application/vnd.google-apps.document') {
-    return `https://docs.google.com/document/d/${file.id}/preview`;
+    return `https://docs.google.com/document/d/${file.id}/edit?embedded=true`;
   }
   if (file.mimeType === 'application/vnd.google-apps.spreadsheet') {
-    return `https://docs.google.com/spreadsheets/d/${file.id}/preview`;
+    return `https://docs.google.com/spreadsheets/d/${file.id}/edit?embedded=true`;
   }
   if (file.mimeType === 'application/vnd.google-apps.presentation') {
-    return `https://docs.google.com/presentation/d/${file.id}/preview`;
+    return `https://docs.google.com/presentation/d/${file.id}/edit?embedded=true`;
+  }
+  if (file.mimeType === 'application/vnd.google-apps.form') {
+    return `https://docs.google.com/forms/d/${file.id}/edit?embedded=true`;
   }
   return null;
+}
+
+export function isGoogleDoc(mimeType: string): boolean {
+  return mimeType.startsWith('application/vnd.google-apps.') && mimeType !== 'application/vnd.google-apps.folder';
 }
 
 export function formatFileSize(bytes: string | null | undefined): string {

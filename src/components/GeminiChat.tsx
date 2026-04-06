@@ -34,6 +34,7 @@ interface GeminiChatProps {
   onClose: () => void;
   onUiRefresh: (panels: string[]) => void;
   contextCounts?: ContextCounts;
+  onQuickAction?: string | null;
 }
 
 const QUICK_COMMANDS = [
@@ -46,7 +47,7 @@ const QUICK_COMMANDS = [
 
 const STORAGE_KEY = 'gemini-chat-history';
 
-export default function GeminiChat({ isOpen, onClose, onUiRefresh, contextCounts }: GeminiChatProps) {
+export default function GeminiChat({ isOpen, onClose, onUiRefresh, contextCounts, onQuickAction }: GeminiChatProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -112,6 +113,14 @@ export default function GeminiChat({ isOpen, onClose, onUiRefresh, contextCounts
     vv.addEventListener('resize', handleResize);
     return () => vv.removeEventListener('resize', handleResize);
   }, [isOpen]);
+
+  // Handle quick action pre-fill
+  useEffect(() => {
+    if (onQuickAction && isOpen) {
+      setInput(onQuickAction);
+      setTimeout(() => inputRef.current?.focus(), 300);
+    }
+  }, [onQuickAction, isOpen]);
 
   const sendMessage = useCallback(async (text: string) => {
     if (!text.trim() || isLoading) return;

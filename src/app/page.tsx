@@ -24,6 +24,7 @@ import GeminiChat from '@/components/GeminiChat';
 import SheetsPanel from '@/components/SheetsPanel';
 import WeeklyDigest from '@/components/WeeklyDigest';
 import SettingsPanel from '@/components/SettingsPanel';
+import MobileTabBar from '@/components/MobileTabBar';
 
 type View = 'dashboard' | 'ai-hub' | 'gmail' | 'calendar' | 'drive' | 'content' | 'notes' | 'tasks' | 'bookmarks' | 'settings';
 
@@ -43,6 +44,7 @@ export default function Home() {
   const [contextCounts, setContextCounts] = useState({ emails: 0, events: 0, tasks: 0, notes: 0 });
   const [refreshKey, setRefreshKey] = useState(0);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [quickAction, setQuickAction] = useState<string | null>(null);
   const isAuth = !!session;
 
   useEffect(() => {
@@ -105,6 +107,18 @@ export default function Home() {
     }, 100);
   }, []);
 
+  const handleQuickAction = useCallback((prefill: string | null) => {
+    if (prefill === null) {
+      // "Start Round" - open the app
+      window.open('https://pin-high.vercel.app', '_blank');
+      return;
+    }
+    setQuickAction(prefill);
+    setGeminiOpen(true);
+    // Clear after a tick so the same action can be re-triggered
+    setTimeout(() => setQuickAction(null), 500);
+  }, []);
+
   const renderView = () => {
     switch (currentView) {
       case 'dashboard':
@@ -132,6 +146,28 @@ export default function Home() {
                 <SearchBar onNavigate={(v) => setCurrentView(v as View)} />
                 <WeatherWidget />
               </div>
+            </div>
+
+            {/* Quick Actions Bar */}
+            <div className="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1 scrollbar-hide">
+              {[
+                { icon: '\uD83D\uDE80', label: 'Start Round', prefill: null as string | null },
+                { icon: '\u2705', label: 'Add Task', prefill: 'Add task: ' },
+                { icon: '\uD83D\uDCDD', label: 'New Note', prefill: 'Add note titled: ' },
+                { icon: '\uD83D\uDCC5', label: 'Add Event', prefill: 'Add to my calendar: ' },
+                { icon: '\u270D\uFE0F', label: 'Write Post', prefill: 'Write a LinkedIn post for PinHigh: ' },
+                { icon: '\uD83D\uDCCA', label: 'Check Metrics', prefill: 'Show me this week\'s PinHigh metrics' },
+              ].map((action) => (
+                <button
+                  key={action.label}
+                  onClick={() => handleQuickAction(action.prefill)}
+                  className="flex items-center gap-1.5 px-3 h-10 rounded-xl bg-surface-1 border border-border hover:bg-surface-2 transition-all text-[13px] font-medium text-gray-700 dark:text-zinc-300 whitespace-nowrap flex-shrink-0 min-h-[40px]"
+                  style={{ boxShadow: 'var(--shadow-card)' }}
+                >
+                  <span className="text-sm">{action.icon}</span>
+                  {action.label}
+                </button>
+              ))}
             </div>
 
             {/* Main grid - clickable cards */}
@@ -282,11 +318,14 @@ export default function Home() {
         </>
       )}
 
-      <main className="flex-1 ml-0 md:ml-[260px] pt-[72px] md:pt-0 p-4 md:p-8 lg:p-10">
+      <main className="flex-1 ml-0 md:ml-[260px] pt-[72px] md:pt-0 p-4 md:p-8 lg:p-10 pb-[calc(80px+env(safe-area-inset-bottom,0px))] md:pb-8 lg:pb-10">
         <div className="max-w-[1280px] mx-auto">
           {renderView()}
         </div>
       </main>
+
+      {/* Mobile Bottom Tab Bar */}
+      <MobileTabBar currentView={currentView} onViewChange={setCurrentView} />
 
       {/* Gemini Chat - floating, always present when authenticated and enabled */}
       {isAuth && geminiEnabled && (
@@ -312,6 +351,7 @@ export default function Home() {
             onClose={() => setGeminiOpen(false)}
             onUiRefresh={handleUiRefresh}
             contextCounts={contextCounts}
+            onQuickAction={quickAction}
           />
         </>
       )}

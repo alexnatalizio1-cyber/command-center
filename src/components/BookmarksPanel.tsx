@@ -17,10 +17,13 @@ const DEFAULT_FOLDERS = ['Quick Access', 'PinHigh', 'Tools', 'Resources', 'Socia
 
 const SEED_BOOKMARKS: BookmarkItem[] = [
   { id: 'seed-1', title: 'PinHigh App', url: 'https://pin-high.vercel.app', folder: 'PinHigh', favicon: 'https://www.google.com/s2/favicons?domain=pin-high.vercel.app&sz=32', createdAt: '2026-04-04T00:00:00Z' },
-  { id: 'seed-2', title: 'Supabase Dashboard', url: 'https://supabase.com/dashboard', folder: 'PinHigh', favicon: 'https://www.google.com/s2/favicons?domain=supabase.com&sz=32', createdAt: '2026-04-04T00:00:00Z' },
-  { id: 'seed-3', title: 'PinHigh GitHub', url: 'https://github.com/alexnatalizio1-cyber/pin-high', folder: 'PinHigh', favicon: 'https://www.google.com/s2/favicons?domain=github.com&sz=32', createdAt: '2026-04-04T00:00:00Z' },
-  { id: 'seed-4', title: 'Vercel Dashboard', url: 'https://vercel.com/dashboard', folder: 'PinHigh', favicon: 'https://www.google.com/s2/favicons?domain=vercel.com&sz=32', createdAt: '2026-04-04T00:00:00Z' },
-  { id: 'seed-5', title: 'Command Center', url: 'https://command-center-wine-alpha.vercel.app', folder: 'Tools', favicon: 'https://www.google.com/s2/favicons?domain=command-center-wine-alpha.vercel.app&sz=32', createdAt: '2026-04-04T00:00:00Z' },
+  { id: 'seed-2', title: 'Supabase', url: 'https://supabase.com/dashboard/project/klaspxohbxwdkwliefpi', folder: 'PinHigh', favicon: 'https://www.google.com/s2/favicons?domain=supabase.com&sz=32', createdAt: '2026-04-04T00:00:00Z' },
+  { id: 'seed-3', title: 'Vercel', url: 'https://vercel.com/dashboard', folder: 'PinHigh', favicon: 'https://www.google.com/s2/favicons?domain=vercel.com&sz=32', createdAt: '2026-04-04T00:00:00Z' },
+  { id: 'seed-4', title: 'GitHub', url: 'https://github.com/alexnatalizio1-cyber/pin-high', folder: 'PinHigh', favicon: 'https://www.google.com/s2/favicons?domain=github.com&sz=32', createdAt: '2026-04-04T00:00:00Z' },
+  { id: 'seed-5', title: 'Buffer', url: 'https://buffer.com', folder: 'Tools', favicon: 'https://www.google.com/s2/favicons?domain=buffer.com&sz=32', createdAt: '2026-04-04T00:00:00Z' },
+  { id: 'seed-6', title: 'HeyGen', url: 'https://heygen.com', folder: 'Tools', favicon: 'https://www.google.com/s2/favicons?domain=heygen.com&sz=32', createdAt: '2026-04-04T00:00:00Z' },
+  { id: 'seed-7', title: 'Google AI Studio', url: 'https://aistudio.google.com', folder: 'Tools', favicon: 'https://www.google.com/s2/favicons?domain=aistudio.google.com&sz=32', createdAt: '2026-04-04T00:00:00Z' },
+  { id: 'seed-8', title: 'Command Center', url: 'https://command-center-wine-alpha.vercel.app', folder: 'Tools', favicon: 'https://www.google.com/s2/favicons?domain=command-center-wine-alpha.vercel.app&sz=32', createdAt: '2026-04-04T00:00:00Z' },
 ];
 
 export default function BookmarksPanel({ compact = false }: { compact?: boolean }) {

@@ -5,6 +5,7 @@ export async function GET(req: NextRequest) {
     appStatus: null,
     lastCommit: null,
     lastDeployment: null,
+    waitlistCount: null,
   };
 
   // 1. Check app status
@@ -53,7 +54,7 @@ export async function GET(req: NextRequest) {
     } catch {}
   }
 
-  // 3. Last Vercel deployment
+  // 3. Last Vercel deployment (use commit info as proxy if no VERCEL_PROJECT_TOKEN)
   const vercelToken = process.env.VERCEL_PROJECT_TOKEN;
   if (vercelToken) {
     try {
@@ -75,6 +76,45 @@ export async function GET(req: NextRequest) {
             url: d.url ? `https://${d.url}` : null,
             inspectorUrl: d.inspectorUrl || null,
           };
+        }
+      }
+    } catch {}
+  } else if (results.lastCommit) {
+    // Use commit as proxy for deploy
+    results.lastDeployment = {
+      state: 'READY',
+      createdAt: new Date(results.lastCommit.date).getTime(),
+      url: 'https://pin-high.vercel.app',
+      inspectorUrl: null,
+    };
+  }
+
+  // 4. Waitlist count from Supabase
+  const supabaseKey = process.env.SUPABASE_SERVICE_KEY;
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://klaspxohbxwdkwliefpi.supabase.co';
+  if (supabaseKey) {
+    try {
+      const res = await fetch(
+        `${supabaseUrl}/rest/v1/waitlist?select=count`,
+        {
+          method: 'GET',
+          headers: {
+            apikey: supabaseKey,
+            Authorization: `Bearer ${supabaseKey}`,
+            Prefer: 'count=exact',
+          },
+        }
+      );
+      if (res.ok) {
+        const countHeader = res.headers.get('content-range');
+        // content-range header format: "0-X/TOTAL" or "*/TOTAL"
+        if (countHeader) {
+          const total = countHeader.split('/').pop();
+          results.waitlistCount = total ? parseInt(total, 10) : 0;
+        } else {
+          // fallback: try parsing body
+          const data = await res.json();
+          results.waitlistCount = Array.isArray(data) ? data.length : 0;
         }
       }
     } catch {}

@@ -108,6 +108,10 @@ export interface Pick extends ScoredAccount {
   suggestedSolution: string;
   /** Approximate total headcount, when known. */
   employees?: string;
+  /** Date of the triggering event (recency), when known. */
+  eventDate?: string;
+  /** Likely already a Blancco channel/OEM/ITAD partner — verify in CRM. */
+  existingRelationship?: boolean;
   /** Named IT/security decision makers found via public web search. */
   contacts: DecisionMaker[];
 }
@@ -360,11 +364,20 @@ export interface TavilyResult {
   title: string;
   url: string;
   content: string;
+  /** ISO date the source was published (news topic only), when Tavily knows. */
+  published?: string;
+  /** Fuller article body, populated only when raw content is requested. */
+  raw?: string;
 }
 
 async function tavilySearch(
   query: string,
-  opts: { days?: number; max?: number; topic?: 'news' | 'general' } = {},
+  opts: {
+    days?: number;
+    max?: number;
+    topic?: 'news' | 'general';
+    raw?: boolean;
+  } = {},
 ): Promise<{ results: TavilyResult[]; error?: string }> {
   const key = process.env.TAVILY_API_KEY;
   if (!key) return { results: [], error: 'TAVILY_API_KEY not set' };
@@ -379,9 +392,10 @@ async function tavilySearch(
         topic,
         search_depth: 'advanced',
         // `days` only applies to the news topic; general search ignores it.
-        ...(topic === 'news' ? { days: opts.days ?? 90 } : {}),
+        ...(topic === 'news' ? { days: opts.days ?? 30 } : {}),
         max_results: opts.max ?? 8,
         include_answer: false,
+        include_raw_content: opts.raw === true,
       }),
     });
     if (!res.ok) {
@@ -396,7 +410,15 @@ async function tavilySearch(
       ? data.results.map((r: any) => ({
           title: String(r?.title ?? ''),
           url: String(r?.url ?? ''),
-          content: String(r?.content ?? '').slice(0, 600),
+          content: String(r?.content ?? '').slice(0, 900),
+          published:
+            typeof r?.published_date === 'string'
+              ? r.published_date
+              : undefined,
+          raw:
+            opts.raw && typeof r?.raw_content === 'string'
+              ? r.raw_content.slice(0, 3000)
+              : undefined,
         }))
       : [];
     return { results };
@@ -506,9 +528,54 @@ function sourcesBlock(results: TavilyResult[]): string {
   return results
     .map(
       (r, i) =>
-        `[${i + 1}] ${r.title}\nURL: ${r.url}\n${r.content}`,
+        `[${i + 1}] ${r.title}\nURL: ${r.url}\nPUBLISHED: ${
+          r.published ?? 'unknown'
+        }\n${r.raw ?? r.content}`,
     )
     .join('\n\n');
+}
+
+// ---------------------------------------------------------------------------
+// Targeting guardrails for an SDR-actionable list.
+//
+//  - Fortune-scale giants: Blancco typically already serves these and an SDR
+//    cannot realistically land a first meeting — excluded (unless an
+//    exceptional > 95/100 fit overrides).
+//  - Known Blancco channel / OEM / ITAD partners: NOT excluded, but flagged
+//    so the SDR can verify the relationship in CRM before reaching out.
+// ---------------------------------------------------------------------------
+
+const EMPLOYEE_CAP = 100_000;
+
+const MEGA_CAP =
+  /\b(amazon|aws|walmart|wal-?mart|apple inc|alphabet|google|microsoft|meta platforms|facebook|ups|united parcel|fedex|costco|the home depot|lowe'?s|exxon|chevron|tesla|berkshire hathaway|jpmorgan chase|bank of america|wells fargo|citigroup|at&t|verizon|comcast|target corporation|cvs health|unitedhealth|kroger|general motors|ford motor)\b/i;
+
+const BLANCCO_PARTNER =
+  /\b(dell|emc|hp inc|hpe|hewlett[- ]?packard|lenovo|ibm|kyndryl|iron mountain|sims (lifecycle|recycling)|tes-?amm|tes \(|wisetek|eri direct|electronic recyclers|ingram micro|arrow electronics|tech data|servicenow|intel|cdw|shi international|insight enterprises|sipi|dataspan|securis|revivn|closed loop|cascade asset)\b/i;
+
+function parseEmployeeCount(s?: string): number | null {
+  if (!s) return null;
+  const txt = s.toLowerCase().replace(/,/g, '').trim();
+  const re = /(\d+(?:\.\d+)?)\s*(million|mil|m|thousand|k)?/g;
+  let m: RegExpExecArray | null;
+  let max: number | null = null;
+  while ((m = re.exec(txt)) !== null) {
+    let n = parseFloat(m[1]);
+    if (Number.isNaN(n)) continue;
+    const unit = m[2];
+    if (unit === 'million' || unit === 'mil' || unit === 'm') n *= 1_000_000;
+    else if (unit === 'thousand' || unit === 'k') n *= 1_000;
+    if (max === null || n > max) max = n;
+  }
+  return max;
+}
+
+/** True when the company is too large for an SDR to realistically break into. */
+function isOversized(name: string, employees: string | undefined, fit: number) {
+  if (fit > 95) return false; // exceptional fit overrides the cap
+  if (MEGA_CAP.test(name)) return true;
+  const n = parseEmployeeCount(employees);
+  return n !== null && n > EMPLOYEE_CAP;
 }
 
 /**
@@ -576,7 +643,7 @@ export async function enrichWhyNow(
 
   const query = `${a.name} ${a.city ?? ''} layoffs OR acquisition OR merger OR divestiture OR "data center" OR "cloud migration" OR data breach OR CISO OR CIO OR restructuring`;
   const { results, error: searchError } = await tavilySearch(query, {
-    days: 120,
+    days: 30,
     max: 6,
   });
 
@@ -594,13 +661,13 @@ export async function enrichWhyNow(
 
 Company: "${a.name}"${a.domain ? ` (${a.domain})` : ''}, ${[a.city, a.state, a.country].filter(Boolean).join(', ') || 'North America'}.
 
-Below are real, recent web search results. Using ONLY these results, decide whether there is a credible event in roughly the last 90-120 days that creates a data-sanitization need (${EVENT_FOCUS}).
+Below are real web search results, each with a PUBLISHED date. Using ONLY these results, decide whether there is a credible event within roughly the last 30 days (strongly prefer the last 14) that creates a data-sanitization need (${EVENT_FOCUS}).
 
 SEARCH RESULTS:
 ${sourcesBlock(results)}
 
 Rules:
-- Use ONLY the results above. If they do not contain a credible, relevant, recent event for THIS company, set confidence to "none" and say so plainly. DO NOT speculate or use outside knowledge.
+- Use ONLY the results above. If they do not contain a credible, relevant event from the last ~30 days for THIS company, set confidence to "none" and say so plainly. Reject stale (months-old) coverage. DO NOT speculate or use outside knowledge.
 - "sources" must be URLs taken verbatim from the results above.
 - whyNow: max 2 sentences, specific.
 - whyNowDetail: 3-6 sentences expanding on the specifics strictly from the results (dates, figures, what happened); empty string if no extra detail exists.
@@ -844,9 +911,11 @@ interface WebCompany {
   approxEmployees?: string;
   vertical?: string;
   eventType?: string;
+  eventDate?: string;
   whyNow?: string;
   whyNowDetail?: string;
   confidence?: string;
+  likelyBlanccoRelationship?: boolean;
   sources?: string[];
 }
 
@@ -894,6 +963,8 @@ function buildWebPick(c: WebCompany): Pick {
   ).includes(c.confidence as any)
     ? (c.confidence as WhyNow['confidence'])
     : 'low';
+  const existingRelationship =
+    c.likelyBlanccoRelationship === true || BLANCCO_PARTNER.test(c.name ?? '');
 
   const eventPoints = /layoff|datacenter|data center|m&a|acquisition|merger|refresh|divest/.test(
     event,
@@ -976,7 +1047,9 @@ function buildWebPick(c: WebCompany): Pick {
     tier,
     fitScore,
     signals,
-    crmStatus: 'Web research — no Apollo/CRM data',
+    crmStatus: existingRelationship
+      ? 'Likely existing Blancco partner — verify in CRM'
+      : 'Net-new (web research — no CRM data)',
     vertical,
     whyNow: {
       whyNow:
@@ -990,6 +1063,8 @@ function buildWebPick(c: WebCompany): Pick {
     suggestedContact: g.suggestedContact,
     suggestedSolution: g.suggestedSolution,
     employees: c.approxEmployees?.trim() || undefined,
+    eventDate: c.eventDate?.trim() || undefined,
+    existingRelationship,
     contacts: [],
   };
 }
@@ -1002,17 +1077,28 @@ export async function runWebResearch(
   ];
   const apiKey = process.env.GEMINI_API_KEY as string;
   const avoid = Array.from(recentlyPickedKeys).slice(0, 30);
+  const now = new Date();
+  const todayIso = now.toISOString().slice(0, 10);
+  const monthYear = now.toLocaleDateString('en-US', {
+    month: 'long',
+    year: 'numeric',
+  });
 
-  // Fresh, real web results from Tavily across the event categories.
+  // Fresh, real web results from Tavily across the event categories. Queries
+  // are scoped to the current month so Tavily's freshest indexed news surfaces
+  // first; `days: 30` is a hard recency window on the news topic.
   const queries = [
-    'enterprise data center closure OR decommissioning OR consolidation United States Canada',
-    'company layoffs financial services OR insurance OR banking United States',
-    'company merger OR acquisition OR divestiture United States enterprise',
-    'data breach United States enterprise healthcare OR financial services',
-    'new CISO OR CIO appointment United States enterprise company',
+    `US company layoffs OR job cuts OR restructuring announced ${monthYear}`,
+    `enterprise data center closure OR decommissioning OR consolidation OR cloud migration ${monthYear} United States`,
+    `company merger OR acquisition OR divestiture OR spinoff United States ${monthYear}`,
+    `enterprise data breach OR ransomware United States ${monthYear}`,
+    `new CIO OR CISO OR "Chief Information Officer" appointment United States company ${monthYear}`,
+    `company office OR site OR plant closure OR consolidation United States ${monthYear}`,
+    `IT hardware OR PC OR server fleet refresh OR end-of-life asset disposal enterprise ${monthYear}`,
+    `bankruptcy OR Chapter 11 OR wind-down United States company ${monthYear}`,
   ];
   const searches = await Promise.all(
-    queries.map((q) => tavilySearch(q, { days: 90, max: 6 })),
+    queries.map((q) => tavilySearch(q, { days: 30, max: 10 })),
   );
   const seenUrl = new Set<string>();
   const dedupedResults: TavilyResult[] = [];
@@ -1024,10 +1110,15 @@ export async function runWebResearch(
       }
     }
   }
-  // Cap the corpus fed to Gemini: a smaller prompt stays well under the
-  // free-tier per-minute token limit (the Weekly Digest prompt is tiny and
-  // never throttles on the same key — the size difference is what 429s here).
-  const results = dedupedResults.slice(0, 24);
+  // Freshest first so the most recent coverage survives the corpus cap.
+  dedupedResults.sort((a, b) => {
+    const ta = a.published ? Date.parse(a.published) : 0;
+    const tb = b.published ? Date.parse(b.published) : 0;
+    return tb - ta;
+  });
+  // Cap the corpus fed to Gemini so the prompt stays under the free-tier
+  // per-minute token limit while still being substantially deeper than before.
+  const results = dedupedResults.slice(0, 28);
   const searchErr = searches.find((s) => s.error)?.error;
 
   if (results.length === 0) {
@@ -1037,24 +1128,28 @@ export async function runWebResearch(
     return { date: today(), picks: [], candidatesEvaluated: 0, notes };
   }
 
-  const prompt = `You are a B2B sales-research analyst for Blancco, the global leader in certified software data erasure / data sanitization (permanently wipes drives and devices WITHOUT destroying hardware; audit-ready compliance for GDPR, CCPA, HIPAA, GLBA, etc.). Blancco's North American enterprise SDR team sells to organizations that erase their OWN end-of-life IT assets.
+  const prompt = `You are a B2B sales-research analyst for Blancco, the global leader in certified software data erasure / data sanitization (permanently wipes drives and devices WITHOUT destroying hardware; audit-ready compliance for GDPR, CCPA, HIPAA, GLBA, etc.). Blancco's North American enterprise SDR team sells to organizations that erase their OWN end-of-life IT assets. Your output goes straight to SDRs who will call/email these accounts this week, so it must be CURRENT, accurate, and reachable.
 
-Below are real, recent web search results. From ONLY these results, identify up to 10 DISTINCT companies HEADQUARTERED in the United States or Canada that have a credible, recent event creating a data-sanitization need (layoffs/workforce reductions; M&A/divestiture; data-center closure/consolidation/cloud migration; hardware/asset refresh; new CISO/CIO/Head of IT Asset Management; data breach; new data-privacy regulatory exposure; ESG/circular-economy/sustainable IT-disposal commitment).
+TODAY IS ${todayIso}.
+
+Below are real web search results with a PUBLISHED date each. From ONLY these results, identify up to 10 DISTINCT companies HEADQUARTERED in the United States or Canada with a credible, FRESH event that creates an end-of-life data-sanitization need (layoffs/workforce reductions; M&A/divestiture/spinoff; data-center closure/consolidation/cloud migration; site/plant closure; hardware/asset refresh; bankruptcy/wind-down; new CISO/CIO/Head of IT Asset Management; data breach; data-privacy regulatory exposure; ESG/circular-economy IT-disposal commitment).
 
 SEARCH RESULTS:
 ${sourcesBlock(results)}
 
 Rules:
-- Use ONLY the results above — do not add companies or events from outside knowledge.
+- Use ONLY the results above — no companies or events from outside knowledge.
+- RECENCY IS CRITICAL. Strongly prefer events whose PUBLISHED date is within the last 14 days of TODAY; you may include up to ~30 days old. REJECT anything older than 30 days (e.g. a months-old item is stale and unusable). Put the event's date in "eventDate".
+- Rank the freshest, most material events first.
 - United States or Canada HQ only.
-- Every company's "sources" must be URLs copied verbatim from the results above.
-- Prefer large enterprise (1,000+ employees); some mid-market is fine. Aim ~70% enterprise.
-- Do NOT include any of these recently-featured names: ${avoid.join(', ') || '(none)'}.
+- "sources" must be URLs copied verbatim from the results above.
+- SDR-REACHABLE SIZE: target organizations roughly 1,000–100,000 employees (enterprise / upper-mid-market sweet spot). Do NOT include Fortune-scale household giants (e.g. Amazon, Walmart, Apple, Alphabet/Google, Microsoft, Meta, UPS, FedEx, big banks/telecoms) or any company over ~100,000 employees — Blancco typically already serves them and an SDR cannot get a first meeting. Only include such a company if the fit is genuinely exceptional.
+- If a company is a known IT hardware OEM, IT distributor/reseller, or ITAD/e-waste recycler (e.g. Dell, HP/HPE, Lenovo, IBM/Kyndryl, Iron Mountain, Sims Lifecycle, Ingram Micro, Arrow, ServiceNow, CDW), still you MAY include it but set "likelyBlanccoRelationship": true so the SDR verifies the existing relationship first. Otherwise set it false.
+- Aim ~70% enterprise. Do NOT include any of these recently-featured names: ${avoid.join(', ') || '(none)'}.
 - If fewer than 10 qualify, return fewer. Do NOT fabricate.
+- "whyNow": 1-2 sharp sentences an SDR can open a call with. "whyNowDetail": 3-6 sentences of specifics strictly from the sources (date, figures, units/sites affected, the data-sanitization angle); empty string if the sources add nothing.
 
-- "whyNowDetail" must elaborate using ONLY specifics found in the results (dates, figures, what exactly happened, named locations/units) — no outside knowledge, no speculation. If the results contain no detail beyond the one-liner, return an empty string for it.
-
-Return JSON: {"companies":[{"name":"","website":"","hqCity":"","hqState":"","hqCountry":"","sizeTier":"enterprise|mid-market","approxEmployees":"","vertical":"Financial Services|Insurance|Healthcare & Pharma|Government & Public Sector|Telecom|Technology & Data Center|Other / Diversified","eventType":"layoffs|m&a|datacenter|refresh|leadership|breach|regulatory|esg","whyNow":"1-2 specific sentences tying the event to a data-sanitization need","whyNowDetail":"3-6 sentences expanding on the specific situation strictly from the sources, and why it creates a data-sanitization need","confidence":"high|medium|low","sources":["url"]}]}`;
+Return JSON: {"companies":[{"name":"","website":"","hqCity":"","hqState":"","hqCountry":"","sizeTier":"enterprise|mid-market","approxEmployees":"","vertical":"Financial Services|Insurance|Healthcare & Pharma|Government & Public Sector|Telecom|Technology & Data Center|Other / Diversified","eventType":"layoffs|m&a|datacenter|refresh|leadership|breach|regulatory|esg","eventDate":"","whyNow":"","whyNowDetail":"","confidence":"high|medium|low","likelyBlanccoRelationship":false,"sources":["url"]}]}`;
 
   const { json, error, model } = await geminiJSON(apiKey, prompt);
   let companies: WebCompany[] = [];
@@ -1106,13 +1201,34 @@ Return JSON: {"companies":[{"name":"","website":"","hqCity":"","hqState":"","hqC
     .filter((p) => p.whyNow.confidence !== 'none')
     .sort((a, b) => b.fitScore - a.fitScore);
 
+  // Drop Fortune-scale giants / >100k-employee orgs (unless an exceptional
+  // > 95/100 fit overrides) — keep the list to accounts an SDR can land.
+  const oversized: string[] = [];
+  const sized = built.filter((p) => {
+    if (isOversized(p.name, p.employees, p.fitScore)) {
+      oversized.push(p.name);
+      return false;
+    }
+    return true;
+  });
+
   notes.push(
-    `${evaluated} companies returned by web research; ${built.length} usable after North-America, dedupe and credible-source filtering.`,
+    `${evaluated} companies returned by web research; ${built.length} usable after North-America/dedupe/credible-source filtering; ${sized.length} after the SDR-reachability size cap.`,
+  );
+  if (oversized.length) {
+    notes.push(
+      `Excluded as too large to break into (Blancco likely already serves them; >~100k employees / Fortune-scale): ${oversized
+        .slice(0, 6)
+        .join(', ')}.`,
+    );
+  }
+  notes.push(
+    'Recency: events strongly preferred within 14 days, hard-capped at ~30 days — anything older is rejected as stale.',
   );
 
-  if (built.length === 0) {
+  if (sized.length === 0) {
     notes.push(
-      'No companies cleared the credible-signal bar today. Reporting zero rather than padding with speculation.',
+      'No reachable companies cleared the credible-signal bar today. Reporting zero rather than padding with speculation or stale/oversized accounts.',
     );
     return { date: today(), picks: [], candidatesEvaluated: evaluated, notes };
   }
@@ -1120,14 +1236,14 @@ Return JSON: {"companies":[{"name":"","website":"","hqCity":"","hqState":"","hqC
   // Final 5 with vertical diversity (max 2 per vertical) and a soft size mix.
   const picks: Pick[] = [];
   const perVertical: Record<string, number> = {};
-  for (const p of built) {
+  for (const p of sized) {
     if (picks.length >= 5) break;
     if ((perVertical[p.vertical] ?? 0) >= 2) continue;
     perVertical[p.vertical] = (perVertical[p.vertical] ?? 0) + 1;
     picks.push(p);
   }
   if (picks.length < 5) {
-    for (const p of built) {
+    for (const p of sized) {
       if (picks.length >= 5) break;
       if (!picks.includes(p)) picks.push(p);
     }
@@ -1142,14 +1258,78 @@ Return JSON: {"companies":[{"name":"","website":"","hqCity":"","hqState":"","hqC
   notes.push(
     `Size mix: ${entCount} enterprise / ${picks.length - entCount} mid-market (target ~70/30; signal-driven, so it varies).`,
   );
+  const flagged = picks.filter((p) => p.existingRelationship).length;
+  if (flagged) {
+    notes.push(
+      `${flagged} pick(s) flagged as a likely existing Blancco partner/OEM/ITAD — kept but labelled so you can verify the relationship in CRM before outreach.`,
+    );
+  }
 
+  // Deep-read the top articles for each finalist and find named contacts.
   await Promise.all(
     picks.map(async (p) => {
-      p.contacts = await findDecisionMakers(p.name, p.domain);
+      const [contacts] = await Promise.all([
+        findDecisionMakers(p.name, p.domain),
+        deepenWhyNow(p),
+      ]);
+      p.contacts = contacts;
     }),
   );
 
   return { date: today(), picks, candidatesEvaluated: evaluated, notes };
+}
+
+/**
+ * Second-pass deep read: pull fuller article bodies for the finalist's
+ * specific event and rewrite the "why now" detail with real specifics
+ * (date, figures, units/sites, the data-sanitization angle). Honesty rule
+ * unchanged: only the fetched articles, no speculation; left as-is if the
+ * deep read adds nothing usable.
+ */
+async function deepenWhyNow(p: Pick): Promise<void> {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) return;
+  const q = `${p.name} ${p.whyNow.eventType} ${p.eventDate ?? ''} layoffs OR acquisition OR divestiture OR "data center" OR closure OR restructuring`;
+  const { results } = await tavilySearch(q, { days: 30, max: 5, raw: true });
+  if (results.length === 0) return;
+
+  const prompt = `You are a Blancco SDR research analyst. Company: "${p.name}". Below are full-text recent articles. Using ONLY them, write a tight intelligence brief for an SDR about the event that creates an end-of-life data-sanitization need.
+
+ARTICLES:
+${sourcesBlock(results)}
+
+Rules:
+- ONLY use the articles above — no outside knowledge or speculation.
+- Lead with WHAT happened and WHEN (exact date if stated). Include concrete figures (headcount cut, sites/data centers affected, deal size), the specific business units/locations, and the explicit data-sanitization angle (returned employee devices, decommissioned servers/drives/LUNs, end-of-life media, compliance).
+- 4-7 sentences. If the articles add nothing beyond a headline, return "" for detail.
+- "sources": verbatim URLs from the articles only. "eventDate": the event's date if stated, else "".
+
+Return JSON: {"detail":"","eventDate":"","confidence":"high|medium|low","sources":["url"]}`;
+
+  const { json } = await geminiJSON(apiKey, prompt);
+  if (!json) return;
+  const allowed = new Set(results.map((r) => r.url));
+  const srcs: string[] = (Array.isArray(json.sources) ? json.sources : [])
+    .filter((u: unknown): u is string => typeof u === 'string' && allowed.has(u))
+    .slice(0, 4);
+  const detail =
+    typeof json.detail === 'string' ? json.detail.trim() : '';
+  if (!detail || srcs.length === 0) return;
+
+  p.whyNow.detail = detail;
+  p.whyNow.sources = Array.from(
+    new Set([...p.whyNow.sources, ...srcs]),
+  ).slice(0, 5);
+  if (
+    typeof json.eventDate === 'string' &&
+    json.eventDate.trim() &&
+    !p.eventDate
+  ) {
+    p.eventDate = json.eventDate.trim();
+  }
+  if ((['high', 'medium', 'low'] as const).includes(json.confidence)) {
+    p.whyNow.confidence = json.confidence;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1231,6 +1411,11 @@ export function renderEmailHtml(r: RunResult): string {
             } &middot; ${escapeHtml(p.vertical)} &middot; ${escapeHtml(
         p.tier,
       )} &middot; ${escapeHtml(p.crmStatus)}</div>
+            ${
+              p.existingRelationship
+                ? `<div style="margin-top:6px;font-size:12px;color:#92400e;background:#fef3c7;border-radius:8px;padding:6px 10px;">&#9888; Likely an existing Blancco partner/OEM/ITAD &mdash; verify the relationship in CRM before outreach.</div>`
+                : ''
+            }
             <div style="font-size:18px;font-weight:700;color:#111827;margin:3px 0;">
               ${
                 p.websiteUrl
@@ -1257,7 +1442,13 @@ export function renderEmailHtml(r: RunResult): string {
               <strong>Why now</strong>
               <span style="font-size:11px;color:#fff;background:${
                 CONF_COLOR[p.whyNow.confidence]
-              };padding:2px 7px;border-radius:999px;margin-left:6px;">${p.whyNow.confidence.toUpperCase()} confidence</span>
+              };padding:2px 7px;border-radius:999px;margin-left:6px;">${p.whyNow.confidence.toUpperCase()} confidence</span>${
+        p.eventDate
+          ? `<span style="font-size:11px;color:#6b7280;margin-left:8px;">Reported ${escapeHtml(
+              p.eventDate,
+            )}</span>`
+          : ''
+      }
               <div style="margin-top:5px;color:#374151;">${escapeHtml(
                 p.whyNow.whyNow,
               )}</div>
@@ -1297,11 +1488,11 @@ export function renderEmailHtml(r: RunResult): string {
             <strong style="color:#374151;">How these were chosen</strong><br/>
             ${r.notes.map((n) => `&bull; ${escapeHtml(n)}`).join('<br/>')}
             <br/><br/>
-            Signals are pulled from Blancco's Apollo workspace (headcount trend,
-            blancco.com intent, CRM coverage, vertical) and enriched with live
-            web search for recent events. Confidence reflects source quality;
-            "none" means no credible recent web event was found and the
-            rationale rests on structured signals only. ${r.candidatesEvaluated} accounts evaluated.
+            Accounts are surfaced from live, recent web research, scored on
+            data-sanitization buying signals, size-filtered to companies an SDR
+            can realistically reach, then deep-read for the specifics.
+            Confidence reflects source quality; nothing is listed without a
+            credible, recent, verbatim source. ${r.candidatesEvaluated} accounts evaluated.
           </div>
         </td></tr>
       </table>

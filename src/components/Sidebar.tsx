@@ -18,6 +18,7 @@ import {
   Moon,
   Command,
   Megaphone,
+  Target,
   Settings,
 } from 'lucide-react';
 
@@ -31,6 +32,7 @@ type View =
   | 'notes'
   | 'tasks'
   | 'bookmarks'
+  | 'market-research'
   | 'settings';
 
 interface SidebarProps {
@@ -51,6 +53,7 @@ const NAV_ITEMS: { id: View; label: string; icon: any; section?: string; color?:
   { id: 'notes', label: 'Notes', icon: StickyNote, color: '#F59E0B' },
   { id: 'tasks', label: 'Tasks', icon: CheckSquare, color: '#10B981' },
   { id: 'bookmarks', label: 'Bookmarks', icon: Bookmark, color: '#8B5CF6' },
+  { id: 'market-research', label: 'Market Research', icon: Target, section: 'Sales', color: '#6366f1' },
   { id: 'settings', label: 'Settings', icon: Settings, section: 'System', color: '#6B7280' },
 ];
 

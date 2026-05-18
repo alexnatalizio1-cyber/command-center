@@ -1,0 +1,56 @@
+# Daily Blancco SDR market-research email.
+#
+# This calls the deployed app's /api/market-research route, which pulls North
+# American enterprise/mid-market accounts from Apollo, scores + enriches them,
+# emails the SDR team, and appends the picks to a Google Sheet.
+#
+# ---------------------------------------------------------------------------
+# ONE-TIME SETUP (repo Settings -> Secrets and variables -> Actions):
+#
+#   MARKET_RESEARCH_APP_URL     e.g. https://your-app.vercel.app  (no trailing /)
+#   MARKET_RESEARCH_CRON_SECRET same value as the deployed env var;
+#                               generate with: openssl rand -hex 32
+#
+# The deployed app also needs (in its hosting env, NOT here):
+#   APOLLO_API_KEY, GEMINI_API_KEY, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET,
+#   GOOGLE_REFRESH_TOKEN, MARKET_RESEARCH_RECIPIENTS, MARKET_RESEARCH_CRON_SECRET
+#
+# Minting GOOGLE_REFRESH_TOKEN for the sending mailbox:
+#   1. https://developers.google.com/oauthplayground  (gear icon ->
+#      "Use your own OAuth credentials", paste GOOGLE_CLIENT_ID/SECRET).
+#   2. Authorize scopes: gmail.send, spreadsheets, drive  (sign in AS the
+#      mailbox that should send the email + own the Sheet).
+#   3. Exchange authorization code -> copy the refresh token into
+#      GOOGLE_REFRESH_TOKEN in the app's hosting environment.
+# ---------------------------------------------------------------------------
+
+name: Daily Market Research
+
+on:
+  schedule:
+    # 12:00 UTC daily = 7:00 AM US Eastern (8:00 AM EDT). Adjust as needed.
+    - cron: '0 12 * * *'
+  workflow_dispatch: # allow manual "Run workflow" from the Actions tab
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger market-research run
+        run: |
+          if [ -z "${{ secrets.MARKET_RESEARCH_APP_URL }}" ] || [ -z "${{ secrets.MARKET_RESEARCH_CRON_SECRET }}" ]; then
+            echo "::error::MARKET_RESEARCH_APP_URL and MARKET_RESEARCH_CRON_SECRET repo secrets are required."
+            exit 1
+          fi
+          code=$(curl -sS -w "%{http_code}" -o response.json \
+            -X POST "${{ secrets.MARKET_RESEARCH_APP_URL }}/api/market-research" \
+            -H "Authorization: Bearer ${{ secrets.MARKET_RESEARCH_CRON_SECRET }}" \
+            -H "Content-Type: application/json" \
+            --max-time 290 \
+            -d '{}')
+          echo "HTTP $code"
+          cat response.json
+          if [ "$code" -lt 200 ] || [ "$code" -ge 300 ]; then
+            echo "::error::Market research run failed with HTTP $code"
+            exit 1
+          fi

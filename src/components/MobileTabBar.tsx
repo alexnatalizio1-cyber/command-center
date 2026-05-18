@@ -2,7 +2,7 @@
 
 import { Home, Mail, CheckSquare, StickyNote, Settings } from 'lucide-react';
 
-type View = 'dashboard' | 'ai-hub' | 'gmail' | 'calendar' | 'drive' | 'content' | 'notes' | 'tasks' | 'bookmarks' | 'settings';
+type View = 'dashboard' | 'ai-hub' | 'gmail' | 'calendar' | 'drive' | 'content' | 'notes' | 'tasks' | 'bookmarks' | 'market-research' | 'settings';
 
 interface MobileTabBarProps {
   currentView: View;

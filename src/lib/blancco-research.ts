@@ -11,7 +11,6 @@
  * Honesty rule enforced throughout: when a signal or web context is absent we
  * say so explicitly rather than inventing a rationale.
  */
-import { GoogleGenerativeAI } from '@google/generative-ai';
 import { google } from 'googleapis';
 import type { OAuth2Client } from 'google-auth-library';
 
@@ -337,6 +336,91 @@ const EVENT_FOCUS =
   'new data-privacy regulatory exposure; ESG / circular-economy or sustainable ' +
   'IT disposal commitments';
 
+/**
+ * Calls Gemini with Google Search grounding via the REST API directly.
+ *
+ * The installed @google/generative-ai@0.24.x SDK only models the legacy
+ * `googleSearchRetrieval` (Gemini 1.5) tool, not `google_search` (Gemini 2.0
+ * grounding), so SDK grounded calls fail. Hitting the REST endpoint with the
+ * correct `google_search` tool is version-independent and reliable.
+ */
+interface GroundedResult {
+  json: any;
+  sources: string[];
+  error?: string;
+}
+
+async function geminiGroundedJSON(
+  apiKey: string,
+  prompt: string,
+): Promise<GroundedResult> {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+  let data: any;
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        tools: [{ google_search: {} }],
+      }),
+    });
+    if (!res.ok) {
+      const t = await res.text().catch(() => '');
+      return {
+        json: null,
+        sources: [],
+        error: `Gemini HTTP ${res.status}: ${t.slice(0, 200)}`,
+      };
+    }
+    data = await res.json();
+  } catch (e) {
+    return {
+      json: null,
+      sources: [],
+      error: e instanceof Error ? e.message : 'Gemini request failed',
+    };
+  }
+
+  const cand = data?.candidates?.[0];
+  const parts = cand?.content?.parts ?? [];
+  const raw = parts
+    .map((p: any) => (typeof p?.text === 'string' ? p.text : ''))
+    .join('')
+    .trim();
+  const chunks = cand?.groundingMetadata?.groundingChunks ?? [];
+  const sources: string[] = chunks
+    .map((g: any) => g?.web?.uri)
+    .filter((u: unknown): u is string => typeof u === 'string');
+
+  const txt = raw
+    .replace(/```json\s*/gi, '')
+    .replace(/```\s*/g, '')
+    .trim();
+  let parsed: any = null;
+  try {
+    parsed = JSON.parse(txt);
+  } catch {
+    const start = txt.search(/[\[{]/);
+    const end = Math.max(txt.lastIndexOf('}'), txt.lastIndexOf(']'));
+    if (start !== -1 && end > start) {
+      try {
+        parsed = JSON.parse(txt.slice(start, end + 1));
+      } catch {
+        /* fall through */
+      }
+    }
+  }
+  if (parsed == null) {
+    return {
+      json: null,
+      sources,
+      error: `Unparseable model output${raw ? '' : ' (empty response)'}`,
+    };
+  }
+  return { json: parsed, sources };
+}
+
 export async function enrichWhyNow(
   a: ScoredAccount,
 ): Promise<WhyNow> {
@@ -351,15 +435,7 @@ export async function enrichWhyNow(
     };
   }
 
-  try {
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({
-      model: 'gemini-2.0-flash',
-      // Google Search grounding for fresh, citable context.
-      tools: [{ googleSearch: {} } as any],
-    });
-
-    const prompt = `You are a B2B sales researcher for Blancco, the market leader in certified software data erasure / data sanitization (wipes drives & devices without destroying hardware; audit-ready compliance).
+  const prompt = `You are a B2B sales researcher for Blancco, the market leader in certified software data erasure / data sanitization (wipes drives & devices without destroying hardware; audit-ready compliance).
 
 Research the company "${a.name}"${a.domain ? ` (${a.domain})` : ''} located in ${[a.city, a.state, a.country].filter(Boolean).join(', ') || 'North America'}.
 
@@ -373,40 +449,12 @@ Rules:
 Respond ONLY with strict JSON, no markdown:
 {"whyNow":"...","eventType":"layoffs|m&a|datacenter|refresh|leadership|breach|regulatory|esg|none","confidence":"high|medium|low|none","sources":["url", "..."]}`;
 
-    const result = await model.generateContent(prompt);
-    const text = result.response
-      .text()
-      .replace(/```json\s*/g, '')
-      .replace(/```\s*/g, '')
-      .trim();
+  const { json: parsed, sources: grounded, error } = await geminiGroundedJSON(
+    apiKey,
+    prompt,
+  );
 
-    const parsed = JSON.parse(text) as Partial<WhyNow>;
-    const grounding =
-      (result.response as any)?.candidates?.[0]?.groundingMetadata
-        ?.groundingChunks ?? [];
-    const groundedUrls: string[] = grounding
-      .map((g: any) => g?.web?.uri)
-      .filter((u: unknown): u is string => typeof u === 'string');
-
-    const sources = Array.from(
-      new Set([...(parsed.sources ?? []), ...groundedUrls]),
-    ).slice(0, 4);
-
-    const confidence = (
-      ['high', 'medium', 'low', 'none'] as const
-    ).includes(parsed.confidence as any)
-      ? (parsed.confidence as WhyNow['confidence'])
-      : 'none';
-
-    return {
-      whyNow:
-        parsed.whyNow?.trim() ||
-        'No credible recent public event found; rationale rests on Apollo structured signals.',
-      eventType: parsed.eventType || 'none',
-      confidence,
-      sources,
-    };
-  } catch (err) {
+  if (!parsed) {
     return {
       whyNow:
         'Live web enrichment failed for this account; rationale rests on Apollo structured signals only (no speculation added).',
@@ -415,6 +463,29 @@ Respond ONLY with strict JSON, no markdown:
       sources: [],
     };
   }
+
+  const sources = Array.from(
+    new Set([
+      ...(Array.isArray(parsed.sources) ? parsed.sources : []),
+      ...grounded,
+    ]),
+  ).slice(0, 4);
+
+  const confidence = (['high', 'medium', 'low', 'none'] as const).includes(
+    parsed.confidence,
+  )
+    ? (parsed.confidence as WhyNow['confidence'])
+    : 'none';
+
+  return {
+    whyNow:
+      typeof parsed.whyNow === 'string' && parsed.whyNow.trim()
+        ? parsed.whyNow.trim()
+        : 'No credible recent public event found; rationale rests on Apollo structured signals.',
+    eventType: parsed.eventType || 'none',
+    confidence,
+    sources,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -764,15 +835,7 @@ export async function runWebResearch(
   const apiKey = process.env.GEMINI_API_KEY as string;
   const avoid = Array.from(recentlyPickedKeys).slice(0, 30);
 
-  let companies: WebCompany[] = [];
-  try {
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({
-      model: 'gemini-2.0-flash',
-      tools: [{ googleSearch: {} } as any],
-    });
-
-    const prompt = `You are a B2B sales-research analyst for Blancco, the global leader in certified software data erasure / data sanitization (permanently wipes drives and devices WITHOUT destroying hardware; audit-ready compliance for GDPR, CCPA, HIPAA, GLBA, etc.). Blancco's North American enterprise SDR team sells to organizations that erase their OWN end-of-life IT assets.
+  const prompt = `You are a B2B sales-research analyst for Blancco, the global leader in certified software data erasure / data sanitization (permanently wipes drives and devices WITHOUT destroying hardware; audit-ready compliance for GDPR, CCPA, HIPAA, GLBA, etc.). Blancco's North American enterprise SDR team sells to organizations that erase their OWN end-of-life IT assets.
 
 Using current web search, find 10 DISTINCT companies HEADQUARTERED in the United States or Canada that, within roughly the last 90 days, have a credible, publicly reported event creating a data-sanitization need: layoffs / workforce reductions; mergers, acquisitions or divestitures; data-center closure, consolidation or major cloud migration; large hardware/asset refresh or device buyback/return programs; appointment of a new CISO/CIO/Head of IT Asset Management; a data breach; new data-privacy regulatory exposure; or a public ESG / circular-economy / sustainable IT-disposal commitment.
 
@@ -788,17 +851,13 @@ Rules:
 Respond with STRICT JSON only, no markdown:
 {"companies":[{"name":"","website":"","hqCity":"","hqState":"","hqCountry":"","sizeTier":"enterprise|mid-market","approxEmployees":"","vertical":"Financial Services|Insurance|Healthcare & Pharma|Government & Public Sector|Telecom|Technology & Data Center|Other / Diversified","eventType":"layoffs|m&a|datacenter|refresh|leadership|breach|regulatory|esg","whyNow":"1-2 specific sentences tying the event to a data-sanitization need","confidence":"high|medium|low","sources":["url"]}]}`;
 
-    const result = await model.generateContent(prompt);
-    const text = result.response
-      .text()
-      .replace(/```json\s*/g, '')
-      .replace(/```\s*/g, '')
-      .trim();
-    const parsed = JSON.parse(text) as { companies?: WebCompany[] };
-    companies = Array.isArray(parsed.companies) ? parsed.companies : [];
-  } catch (err) {
+  const { json, error } = await geminiGroundedJSON(apiKey, prompt);
+  let companies: WebCompany[] = [];
+  if (json && Array.isArray(json.companies)) {
+    companies = json.companies as WebCompany[];
+  } else {
     notes.push(
-      'Web research call failed or returned unparseable data today; reporting zero picks rather than guessing. It will retry on the next run.',
+      `Web research returned no usable data today (${error || 'no companies field'}); reporting zero picks rather than guessing. It will retry on the next run.`,
     );
     return { date: today(), picks: [], candidatesEvaluated: 0, notes };
   }

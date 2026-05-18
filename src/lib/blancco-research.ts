@@ -337,23 +337,68 @@ const EVENT_FOCUS =
   'IT disposal commitments';
 
 /**
- * Calls Gemini with Google Search grounding via the REST API directly.
+ * Web research via Tavily (free tier) + free-tier Gemini for synthesis.
  *
- * The installed @google/generative-ai@0.24.x SDK only models the legacy
- * `googleSearchRetrieval` (Gemini 1.5) tool, not `google_search` (Gemini 2.0
- * grounding), so SDK grounded calls fail. Hitting the REST endpoint with the
- * correct `google_search` tool is version-independent and reliable.
+ * Gemini's Google Search grounding is a paid-tier-only feature, so instead we
+ * fetch fresh, real web results from Tavily and have free-tier Gemini extract
+ * structured JSON strictly from those results. This keeps the honesty rule
+ * intact (the model only sees real fetched sources) at zero cost.
  */
-interface GroundedResult {
-  json: any;
-  sources: string[];
-  error?: string;
+export interface TavilyResult {
+  title: string;
+  url: string;
+  content: string;
 }
 
-async function geminiGroundedJSON(
+async function tavilySearch(
+  query: string,
+  opts: { days?: number; max?: number } = {},
+): Promise<{ results: TavilyResult[]; error?: string }> {
+  const key = process.env.TAVILY_API_KEY;
+  if (!key) return { results: [], error: 'TAVILY_API_KEY not set' };
+  try {
+    const res = await fetch('https://api.tavily.com/search', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        api_key: key,
+        query,
+        topic: 'news',
+        search_depth: 'advanced',
+        days: opts.days ?? 90,
+        max_results: opts.max ?? 8,
+        include_answer: false,
+      }),
+    });
+    if (!res.ok) {
+      const t = await res.text().catch(() => '');
+      return {
+        results: [],
+        error: `Tavily HTTP ${res.status}: ${t.slice(0, 200)}`,
+      };
+    }
+    const data: any = await res.json();
+    const results: TavilyResult[] = Array.isArray(data?.results)
+      ? data.results.map((r: any) => ({
+          title: String(r?.title ?? ''),
+          url: String(r?.url ?? ''),
+          content: String(r?.content ?? '').slice(0, 800),
+        }))
+      : [];
+    return { results };
+  } catch (e) {
+    return {
+      results: [],
+      error: e instanceof Error ? e.message : 'Tavily request failed',
+    };
+  }
+}
+
+/** Free-tier Gemini call (no grounding) that returns parsed JSON. */
+async function geminiJSON(
   apiKey: string,
   prompt: string,
-): Promise<GroundedResult> {
+): Promise<{ json: any; error?: string }> {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
   let data: any;
   try {
@@ -362,63 +407,53 @@ async function geminiGroundedJSON(
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         contents: [{ parts: [{ text: prompt }] }],
-        tools: [{ google_search: {} }],
+        generationConfig: {
+          responseMimeType: 'application/json',
+          temperature: 0.3,
+        },
       }),
     });
     if (!res.ok) {
       const t = await res.text().catch(() => '');
-      return {
-        json: null,
-        sources: [],
-        error: `Gemini HTTP ${res.status}: ${t.slice(0, 200)}`,
-      };
+      return { json: null, error: `Gemini HTTP ${res.status}: ${t.slice(0, 200)}` };
     }
     data = await res.json();
   } catch (e) {
     return {
       json: null,
-      sources: [],
       error: e instanceof Error ? e.message : 'Gemini request failed',
     };
   }
-
-  const cand = data?.candidates?.[0];
-  const parts = cand?.content?.parts ?? [];
-  const raw = parts
+  const raw = (data?.candidates?.[0]?.content?.parts ?? [])
     .map((p: any) => (typeof p?.text === 'string' ? p.text : ''))
     .join('')
     .trim();
-  const chunks = cand?.groundingMetadata?.groundingChunks ?? [];
-  const sources: string[] = chunks
-    .map((g: any) => g?.web?.uri)
-    .filter((u: unknown): u is string => typeof u === 'string');
-
-  const txt = raw
-    .replace(/```json\s*/gi, '')
-    .replace(/```\s*/g, '')
-    .trim();
-  let parsed: any = null;
   try {
-    parsed = JSON.parse(txt);
+    return { json: JSON.parse(raw) };
   } catch {
-    const start = txt.search(/[\[{]/);
-    const end = Math.max(txt.lastIndexOf('}'), txt.lastIndexOf(']'));
+    const start = raw.search(/[\[{]/);
+    const end = Math.max(raw.lastIndexOf('}'), raw.lastIndexOf(']'));
     if (start !== -1 && end > start) {
       try {
-        parsed = JSON.parse(txt.slice(start, end + 1));
+        return { json: JSON.parse(raw.slice(start, end + 1)) };
       } catch {
         /* fall through */
       }
     }
-  }
-  if (parsed == null) {
     return {
       json: null,
-      sources,
       error: `Unparseable model output${raw ? '' : ' (empty response)'}`,
     };
   }
-  return { json: parsed, sources };
+}
+
+function sourcesBlock(results: TavilyResult[]): string {
+  return results
+    .map(
+      (r, i) =>
+        `[${i + 1}] ${r.title}\nURL: ${r.url}\n${r.content}`,
+    )
+    .join('\n\n');
 }
 
 export async function enrichWhyNow(
@@ -435,24 +470,39 @@ export async function enrichWhyNow(
     };
   }
 
+  const query = `${a.name} ${a.city ?? ''} layoffs OR acquisition OR merger OR divestiture OR "data center" OR "cloud migration" OR data breach OR CISO OR CIO OR restructuring`;
+  const { results, error: searchError } = await tavilySearch(query, {
+    days: 120,
+    max: 6,
+  });
+
+  if (searchError || results.length === 0) {
+    return {
+      whyNow:
+        'No recent public coverage found for this account; rationale rests on Apollo structured signals only (no speculation added).',
+      eventType: 'structured-only',
+      confidence: 'none',
+      sources: [],
+    };
+  }
+
   const prompt = `You are a B2B sales researcher for Blancco, the market leader in certified software data erasure / data sanitization (wipes drives & devices without destroying hardware; audit-ready compliance).
 
-Research the company "${a.name}"${a.domain ? ` (${a.domain})` : ''} located in ${[a.city, a.state, a.country].filter(Boolean).join(', ') || 'North America'}.
+Company: "${a.name}"${a.domain ? ` (${a.domain})` : ''}, ${[a.city, a.state, a.country].filter(Boolean).join(', ') || 'North America'}.
 
-Find PUBLIC events from roughly the last 90 days that create a data-sanitization need: ${EVENT_FOCUS}.
+Below are real, recent web search results. Using ONLY these results, decide whether there is a credible event in roughly the last 90-120 days that creates a data-sanitization need (${EVENT_FOCUS}).
+
+SEARCH RESULTS:
+${sourcesBlock(results)}
 
 Rules:
-- Only report events you can support with a credible, recent source.
-- If you cannot find a credible recent event, set confidence to "none" and say so plainly. DO NOT speculate or fabricate.
-- Be specific and concise (max 2 sentences for whyNow).
+- Use ONLY the results above. If they do not contain a credible, relevant, recent event for THIS company, set confidence to "none" and say so plainly. DO NOT speculate or use outside knowledge.
+- "sources" must be URLs taken verbatim from the results above.
+- whyNow: max 2 sentences, specific.
 
-Respond ONLY with strict JSON, no markdown:
-{"whyNow":"...","eventType":"layoffs|m&a|datacenter|refresh|leadership|breach|regulatory|esg|none","confidence":"high|medium|low|none","sources":["url", "..."]}`;
+Return JSON: {"whyNow":"...","eventType":"layoffs|m&a|datacenter|refresh|leadership|breach|regulatory|esg|none","confidence":"high|medium|low|none","sources":["url"]}`;
 
-  const { json: parsed, sources: grounded, error } = await geminiGroundedJSON(
-    apiKey,
-    prompt,
-  );
+  const { json: parsed } = await geminiJSON(apiKey, prompt);
 
   if (!parsed) {
     return {
@@ -464,12 +514,10 @@ Respond ONLY with strict JSON, no markdown:
     };
   }
 
-  const sources = Array.from(
-    new Set([
-      ...(Array.isArray(parsed.sources) ? parsed.sources : []),
-      ...grounded,
-    ]),
-  ).slice(0, 4);
+  const allowed = new Set(results.map((r) => r.url));
+  const sources = (Array.isArray(parsed.sources) ? parsed.sources : [])
+    .filter((u: unknown): u is string => typeof u === 'string' && allowed.has(u))
+    .slice(0, 4);
 
   const confidence = (['high', 'medium', 'low', 'none'] as const).includes(
     parsed.confidence,
@@ -483,7 +531,7 @@ Respond ONLY with strict JSON, no markdown:
         ? parsed.whyNow.trim()
         : 'No credible recent public event found; rationale rests on Apollo structured signals.',
     eventType: parsed.eventType || 'none',
-    confidence,
+    confidence: sources.length === 0 ? 'none' : confidence,
     sources,
   };
 }
@@ -835,26 +883,65 @@ export async function runWebResearch(
   const apiKey = process.env.GEMINI_API_KEY as string;
   const avoid = Array.from(recentlyPickedKeys).slice(0, 30);
 
+  // Fresh, real web results from Tavily across the event categories.
+  const queries = [
+    'enterprise data center closure OR decommissioning OR consolidation United States Canada',
+    'company layoffs financial services OR insurance OR banking United States',
+    'company merger OR acquisition OR divestiture United States enterprise',
+    'data breach United States enterprise healthcare OR financial services',
+    'new CISO OR CIO appointment United States enterprise company',
+  ];
+  const searches = await Promise.all(
+    queries.map((q) => tavilySearch(q, { days: 90, max: 8 })),
+  );
+  const seenUrl = new Set<string>();
+  const results: TavilyResult[] = [];
+  for (const s of searches) {
+    for (const r of s.results) {
+      if (r.url && !seenUrl.has(r.url)) {
+        seenUrl.add(r.url);
+        results.push(r);
+      }
+    }
+  }
+  const searchErr = searches.find((s) => s.error)?.error;
+
+  if (results.length === 0) {
+    notes.push(
+      `Web search returned no results today (${searchErr || 'empty'}); reporting zero picks rather than guessing. It will retry on the next run.`,
+    );
+    return { date: today(), picks: [], candidatesEvaluated: 0, notes };
+  }
+
   const prompt = `You are a B2B sales-research analyst for Blancco, the global leader in certified software data erasure / data sanitization (permanently wipes drives and devices WITHOUT destroying hardware; audit-ready compliance for GDPR, CCPA, HIPAA, GLBA, etc.). Blancco's North American enterprise SDR team sells to organizations that erase their OWN end-of-life IT assets.
 
-Using current web search, find 10 DISTINCT companies HEADQUARTERED in the United States or Canada that, within roughly the last 90 days, have a credible, publicly reported event creating a data-sanitization need: layoffs / workforce reductions; mergers, acquisitions or divestitures; data-center closure, consolidation or major cloud migration; large hardware/asset refresh or device buyback/return programs; appointment of a new CISO/CIO/Head of IT Asset Management; a data breach; new data-privacy regulatory exposure; or a public ESG / circular-economy / sustainable IT-disposal commitment.
+Below are real, recent web search results. From ONLY these results, identify up to 10 DISTINCT companies HEADQUARTERED in the United States or Canada that have a credible, recent event creating a data-sanitization need (layoffs/workforce reductions; M&A/divestiture; data-center closure/consolidation/cloud migration; hardware/asset refresh; new CISO/CIO/Head of IT Asset Management; data breach; new data-privacy regulatory exposure; ESG/circular-economy/sustainable IT-disposal commitment).
 
-Target verticals: financial services, banking, insurance, healthcare/pharma, government/public sector, telecom, technology / data-center operators.
+SEARCH RESULTS:
+${sourcesBlock(results)}
 
 Rules:
+- Use ONLY the results above — do not add companies or events from outside knowledge.
 - United States or Canada HQ only.
-- Each company MUST have at least one credible, recent source URL (news, press release, filing). No source => do not include it.
-- Prefer large enterprise (1,000+ employees); some mid-market (200-1,000) is fine. Aim ~70% enterprise.
+- Every company's "sources" must be URLs copied verbatim from the results above.
+- Prefer large enterprise (1,000+ employees); some mid-market is fine. Aim ~70% enterprise.
 - Do NOT include any of these recently-featured names: ${avoid.join(', ') || '(none)'}.
-- DO NOT speculate or fabricate events. If you cannot find 10 with credible recent events, return fewer.
+- If fewer than 10 qualify, return fewer. Do NOT fabricate.
 
-Respond with STRICT JSON only, no markdown:
-{"companies":[{"name":"","website":"","hqCity":"","hqState":"","hqCountry":"","sizeTier":"enterprise|mid-market","approxEmployees":"","vertical":"Financial Services|Insurance|Healthcare & Pharma|Government & Public Sector|Telecom|Technology & Data Center|Other / Diversified","eventType":"layoffs|m&a|datacenter|refresh|leadership|breach|regulatory|esg","whyNow":"1-2 specific sentences tying the event to a data-sanitization need","confidence":"high|medium|low","sources":["url"]}]}`;
+Return JSON: {"companies":[{"name":"","website":"","hqCity":"","hqState":"","hqCountry":"","sizeTier":"enterprise|mid-market","approxEmployees":"","vertical":"Financial Services|Insurance|Healthcare & Pharma|Government & Public Sector|Telecom|Technology & Data Center|Other / Diversified","eventType":"layoffs|m&a|datacenter|refresh|leadership|breach|regulatory|esg","whyNow":"1-2 specific sentences tying the event to a data-sanitization need","confidence":"high|medium|low","sources":["url"]}]}`;
 
-  const { json, error } = await geminiGroundedJSON(apiKey, prompt);
+  const { json, error } = await geminiJSON(apiKey, prompt);
   let companies: WebCompany[] = [];
   if (json && Array.isArray(json.companies)) {
-    companies = json.companies as WebCompany[];
+    const allowed = new Set(results.map((r) => r.url));
+    companies = (json.companies as WebCompany[])
+      .map((c) => ({
+        ...c,
+        sources: (Array.isArray(c.sources) ? c.sources : []).filter(
+          (u) => typeof u === 'string' && allowed.has(u),
+        ),
+      }))
+      .filter((c) => c.sources.length > 0);
   } else {
     notes.push(
       `Web research returned no usable data today (${error || 'no companies field'}); reporting zero picks rather than guessing. It will retry on the next run.`,

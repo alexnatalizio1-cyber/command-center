@@ -200,8 +200,9 @@ export default function MarketResearchPanel() {
         <div className="rounded-xl bg-amber-50 dark:bg-amber-500/10 p-3.5 mb-3 flex gap-2.5">
           <AlertTriangle className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5" />
           <p className="text-xs text-amber-700 dark:text-amber-400 leading-relaxed">
-            Not fully configured yet. Set <code>APOLLO_API_KEY</code>,{' '}
-            <code>GOOGLE_REFRESH_TOKEN</code>, and{' '}
+            Not fully configured yet. Set <code>GEMINI_API_KEY</code> (web
+            research mode) <em>or</em> <code>APOLLO_API_KEY</code> (richer
+            signals), plus <code>GOOGLE_REFRESH_TOKEN</code> and{' '}
             <code>MARKET_RESEARCH_RECIPIENTS</code> to enable the daily agent.
           </p>
         </div>

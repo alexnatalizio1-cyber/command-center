@@ -461,14 +461,21 @@ function dayRotation(totalPages: number): number {
 }
 
 export async function runResearch(
-  recentlyPickedDomains: Set<string>,
+  recentlyPickedKeys: Set<string>,
 ): Promise<RunResult> {
   const notes: string[] = [];
   const apiKey = process.env.APOLLO_API_KEY;
+
+  // Apollo is the richer source but admin-gated. When no Apollo key is
+  // present, fall back to web-only research (Gemini + Google Search), which
+  // needs only a Gemini key. Output honestly flags the reduced signal depth.
   if (!apiKey) {
-    throw new Error(
-      'APOLLO_API_KEY is not set. The agent needs an Apollo API key to search accounts.',
-    );
+    if (!process.env.GEMINI_API_KEY) {
+      throw new Error(
+        'No data source configured. Set APOLLO_API_KEY for the full Apollo-powered agent, or GEMINI_API_KEY for web-only research mode.',
+      );
+    }
+    return runWebResearch(recentlyPickedKeys);
   }
 
   // Probe to learn page count, then rotate the page daily for fresh picks.
@@ -492,7 +499,9 @@ export async function runResearch(
   });
 
   const deduped = pool.filter(
-    (a) => !a.domain || !recentlyPickedDomains.has(a.domain.toLowerCase()),
+    (a) =>
+      (!a.domain || !recentlyPickedKeys.has(a.domain.toLowerCase())) &&
+      !recentlyPickedKeys.has(a.name.trim().toLowerCase()),
   );
   notes.push(
     `${pool.length} North American candidates pulled (Apollo page ${page}); ${deduped.length} after removing accounts featured in the last 14 days.`,
@@ -571,6 +580,295 @@ export async function runResearch(
     candidatesEvaluated: pool.length,
     notes,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Web-only research mode (no Apollo). Uses Gemini + Google Search grounding to
+// both DISCOVER candidate companies and explain the "why now". Lower signal
+// depth than the Apollo path — no blancco.com intent, no CRM status, no
+// headcount data — and the email/Sheet say so explicitly.
+// ---------------------------------------------------------------------------
+
+const KNOWN_VERTICALS = [
+  'Financial Services',
+  'Insurance',
+  'Healthcare & Pharma',
+  'Government & Public Sector',
+  'Telecom',
+  'Technology & Data Center',
+  'Other / Diversified',
+];
+
+interface WebCompany {
+  name: string;
+  website?: string;
+  hqCity?: string;
+  hqState?: string;
+  hqCountry?: string;
+  sizeTier?: string;
+  approxEmployees?: string;
+  vertical?: string;
+  eventType?: string;
+  whyNow?: string;
+  confidence?: string;
+  sources?: string[];
+}
+
+function hostFromUrl(u?: string): string | undefined {
+  if (!u) return undefined;
+  try {
+    return new URL(u.startsWith('http') ? u : `https://${u}`).hostname
+      .replace(/^www\./, '')
+      .toLowerCase();
+  } catch {
+    return undefined;
+  }
+}
+
+function solutionForVertical(vertical: string): {
+  suggestedContact: string;
+  suggestedSolution: string;
+} {
+  const contact =
+    'CISO / CIO, Head of IT Asset Management, or Data Protection / Privacy Officer';
+  let suggestedSolution =
+    'Blancco Drive Eraser + Management Console for certified, audit-ready erasure across the IT asset estate.';
+  if (/Data Center/.test(vertical)) {
+    suggestedSolution =
+      'Blancco Data Center solution — automated erasure of drives, LUNs, servers and VMs during decommissioning.';
+  } else if (/Financial|Insurance/.test(vertical)) {
+    suggestedSolution =
+      'Blancco Drive/LUN Eraser with compliance reporting for GLBA / PCI / SEC data-disposal requirements.';
+  } else if (/Healthcare/.test(vertical)) {
+    suggestedSolution =
+      'Blancco erasure with HIPAA-aligned tamper-proof certificates for end-of-life media.';
+  }
+  return { suggestedContact: contact, suggestedSolution };
+}
+
+function buildWebPick(c: WebCompany): Pick {
+  const tier: Tier =
+    (c.sizeTier ?? '').toLowerCase().includes('mid') ? 'mid-market' : 'enterprise';
+  const vertical = KNOWN_VERTICALS.includes(c.vertical ?? '')
+    ? (c.vertical as string)
+    : 'Other / Diversified';
+  const event = (c.eventType ?? 'none').toLowerCase();
+  const confidence: WhyNow['confidence'] = (
+    ['high', 'medium', 'low', 'none'] as const
+  ).includes(c.confidence as any)
+    ? (c.confidence as WhyNow['confidence'])
+    : 'low';
+
+  const eventPoints = /layoff|datacenter|data center|m&a|acquisition|merger|refresh|divest/.test(
+    event,
+  )
+    ? 35
+    : /leadership|breach|regulat/.test(event)
+      ? 28
+      : /esg|sustain|circular/.test(event)
+        ? 18
+        : 12;
+  const confPoints =
+    confidence === 'high' ? 30 : confidence === 'medium' ? 18 : 8;
+  const verticalPoints = vertical !== 'Other / Diversified' ? 10 : 0;
+  const tierPoints = tier === 'enterprise' ? 6 : 0;
+
+  const signals: SignalComponent[] = [
+    {
+      label: `Public event: ${c.eventType ?? 'unspecified'}`,
+      points: eventPoints,
+      detail:
+        c.whyNow?.trim() ||
+        'Event reported in public sources (see sources).',
+    },
+    {
+      label: `Web confidence: ${confidence}`,
+      points: confPoints,
+      detail:
+        'Strength of the public sourcing behind the "why now" (web research only — no Apollo/CRM corroboration).',
+    },
+  ];
+  if (verticalPoints) {
+    signals.push({
+      label: `Regulated vertical: ${vertical}`,
+      points: verticalPoints,
+      detail: `${vertical} carries strict data-disposal compliance obligations.`,
+    });
+  }
+  if (tierPoints) {
+    signals.push({
+      label: 'Large asset estate',
+      points: tierPoints,
+      detail: 'Enterprise scale implies a large, refreshed device/drive estate.',
+    });
+  }
+
+  const fitScore = Math.min(
+    100,
+    eventPoints + confPoints + verticalPoints + tierPoints,
+  );
+  const g = solutionForVertical(vertical);
+  const website = c.website
+    ? c.website.startsWith('http')
+      ? c.website
+      : `https://${c.website}`
+    : undefined;
+
+  return {
+    id: c.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+    name: c.name.trim(),
+    domain: hostFromUrl(c.website),
+    websiteUrl: website,
+    linkedinUrl: undefined,
+    city: c.hqCity,
+    state: c.hqState,
+    country: c.hqCountry,
+    revenuePrinted: undefined,
+    revenue: undefined,
+    sicCodes: [],
+    naicsCodes: [],
+    headcountGrowth6m: null,
+    headcountGrowth12m: null,
+    headcountGrowth24m: null,
+    hasIntentSignal: false,
+    intentLevel: null,
+    intentPages: [],
+    numContacts: null,
+    lastActivityDate: null,
+    accountStageId: null,
+    parentAccountName: null,
+    tier,
+    fitScore,
+    signals,
+    crmStatus: 'Web research — no Apollo/CRM data',
+    vertical,
+    whyNow: {
+      whyNow:
+        c.whyNow?.trim() ||
+        'No specific event text returned; see sources for context.',
+      eventType: c.eventType || 'none',
+      confidence,
+      sources: Array.isArray(c.sources) ? c.sources.slice(0, 4) : [],
+    },
+    suggestedContact: g.suggestedContact,
+    suggestedSolution: g.suggestedSolution,
+  };
+}
+
+export async function runWebResearch(
+  recentlyPickedKeys: Set<string>,
+): Promise<RunResult> {
+  const notes: string[] = [
+    'Web-only research mode (no Apollo API key). Candidates and "why now" come from live web search; blancco.com intent, headcount trend and CRM status are unavailable, so scoring is shallower than the Apollo-powered mode.',
+  ];
+  const apiKey = process.env.GEMINI_API_KEY as string;
+  const avoid = Array.from(recentlyPickedKeys).slice(0, 30);
+
+  let companies: WebCompany[] = [];
+  try {
+    const genAI = new GoogleGenerativeAI(apiKey);
+    const model = genAI.getGenerativeModel({
+      model: 'gemini-2.0-flash',
+      tools: [{ googleSearch: {} } as any],
+    });
+
+    const prompt = `You are a B2B sales-research analyst for Blancco, the global leader in certified software data erasure / data sanitization (permanently wipes drives and devices WITHOUT destroying hardware; audit-ready compliance for GDPR, CCPA, HIPAA, GLBA, etc.). Blancco's North American enterprise SDR team sells to organizations that erase their OWN end-of-life IT assets.
+
+Using current web search, find 10 DISTINCT companies HEADQUARTERED in the United States or Canada that, within roughly the last 90 days, have a credible, publicly reported event creating a data-sanitization need: layoffs / workforce reductions; mergers, acquisitions or divestitures; data-center closure, consolidation or major cloud migration; large hardware/asset refresh or device buyback/return programs; appointment of a new CISO/CIO/Head of IT Asset Management; a data breach; new data-privacy regulatory exposure; or a public ESG / circular-economy / sustainable IT-disposal commitment.
+
+Target verticals: financial services, banking, insurance, healthcare/pharma, government/public sector, telecom, technology / data-center operators.
+
+Rules:
+- United States or Canada HQ only.
+- Each company MUST have at least one credible, recent source URL (news, press release, filing). No source => do not include it.
+- Prefer large enterprise (1,000+ employees); some mid-market (200-1,000) is fine. Aim ~70% enterprise.
+- Do NOT include any of these recently-featured names: ${avoid.join(', ') || '(none)'}.
+- DO NOT speculate or fabricate events. If you cannot find 10 with credible recent events, return fewer.
+
+Respond with STRICT JSON only, no markdown:
+{"companies":[{"name":"","website":"","hqCity":"","hqState":"","hqCountry":"","sizeTier":"enterprise|mid-market","approxEmployees":"","vertical":"Financial Services|Insurance|Healthcare & Pharma|Government & Public Sector|Telecom|Technology & Data Center|Other / Diversified","eventType":"layoffs|m&a|datacenter|refresh|leadership|breach|regulatory|esg","whyNow":"1-2 specific sentences tying the event to a data-sanitization need","confidence":"high|medium|low","sources":["url"]}]}`;
+
+    const result = await model.generateContent(prompt);
+    const text = result.response
+      .text()
+      .replace(/```json\s*/g, '')
+      .replace(/```\s*/g, '')
+      .trim();
+    const parsed = JSON.parse(text) as { companies?: WebCompany[] };
+    companies = Array.isArray(parsed.companies) ? parsed.companies : [];
+  } catch (err) {
+    notes.push(
+      'Web research call failed or returned unparseable data today; reporting zero picks rather than guessing. It will retry on the next run.',
+    );
+    return { date: today(), picks: [], candidatesEvaluated: 0, notes };
+  }
+
+  const evaluated = companies.length;
+
+  const naFiltered = companies.filter((c) => {
+    const ct = (c.hqCountry ?? '').toLowerCase();
+    return (
+      ct.includes('united states') ||
+      ct.includes('canada') ||
+      ct === 'us' ||
+      ct === 'usa' ||
+      ct === 'u.s.' ||
+      ct === 'u.s.a.'
+    );
+  });
+
+  const deduped = naFiltered.filter((c) => {
+    const nm = c.name?.trim().toLowerCase();
+    const host = hostFromUrl(c.website);
+    if (!nm) return false;
+    if (recentlyPickedKeys.has(nm)) return false;
+    if (host && recentlyPickedKeys.has(host)) return false;
+    return true;
+  });
+
+  const built = deduped
+    .map(buildWebPick)
+    .filter((p) => p.whyNow.confidence !== 'none')
+    .sort((a, b) => b.fitScore - a.fitScore);
+
+  notes.push(
+    `${evaluated} companies returned by web research; ${built.length} usable after North-America, dedupe and credible-source filtering.`,
+  );
+
+  if (built.length === 0) {
+    notes.push(
+      'No companies cleared the credible-signal bar today. Reporting zero rather than padding with speculation.',
+    );
+    return { date: today(), picks: [], candidatesEvaluated: evaluated, notes };
+  }
+
+  // Final 5 with vertical diversity (max 2 per vertical) and a soft size mix.
+  const picks: Pick[] = [];
+  const perVertical: Record<string, number> = {};
+  for (const p of built) {
+    if (picks.length >= 5) break;
+    if ((perVertical[p.vertical] ?? 0) >= 2) continue;
+    perVertical[p.vertical] = (perVertical[p.vertical] ?? 0) + 1;
+    picks.push(p);
+  }
+  if (picks.length < 5) {
+    for (const p of built) {
+      if (picks.length >= 5) break;
+      if (!picks.includes(p)) picks.push(p);
+    }
+  }
+
+  if (picks.length < 5) {
+    notes.push(
+      `Only ${picks.length} companies met the bar today — listing those rather than speculating to reach five.`,
+    );
+  }
+  const entCount = picks.filter((p) => p.tier === 'enterprise').length;
+  notes.push(
+    `Size mix: ${entCount} enterprise / ${picks.length - entCount} mid-market (target ~70/30; signal-driven, so it varies).`,
+  );
+
+  return { date: today(), picks, candidatesEvaluated: evaluated, notes };
 }
 
 // ---------------------------------------------------------------------------
@@ -852,14 +1150,20 @@ export async function readHistory(
 }
 
 export function recentDomainsFromHistory(rows: string[][]): Set<string> {
-  // Column index 3 = Domain. Treat the last ~14 days of rows as recent.
+  // Column 2 = Company, column 3 = Domain. Both go in one set so the Apollo
+  // path (domain match) and web path (name match) can dedupe against it.
+  // Treat the last ~14 days of rows as recent.
   const set = new Set<string>();
   const cutoff = Date.now() - 14 * 24 * 60 * 60 * 1000;
   for (const row of rows) {
-    const d = (row[3] ?? '').trim().toLowerCase();
     const dateStr = row[0] ?? '';
     const t = Date.parse(dateStr);
-    if (d && (Number.isNaN(t) || t >= cutoff)) set.add(d);
+    const recent = Number.isNaN(t) || t >= cutoff;
+    if (!recent) continue;
+    const name = (row[2] ?? '').trim().toLowerCase();
+    const domain = (row[3] ?? '').trim().toLowerCase();
+    if (name) set.add(name);
+    if (domain) set.add(domain);
   }
   return set;
 }

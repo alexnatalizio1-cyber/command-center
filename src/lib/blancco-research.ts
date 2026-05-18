@@ -88,6 +88,8 @@ export interface ScoredAccount extends ApolloAccount {
 
 export interface WhyNow {
   whyNow: string;
+  /** Longer, source-grounded elaboration shown behind "show more". */
+  detail?: string;
   eventType: string;
   confidence: 'high' | 'medium' | 'low' | 'none';
   sources: string[];
@@ -601,8 +603,9 @@ Rules:
 - Use ONLY the results above. If they do not contain a credible, relevant, recent event for THIS company, set confidence to "none" and say so plainly. DO NOT speculate or use outside knowledge.
 - "sources" must be URLs taken verbatim from the results above.
 - whyNow: max 2 sentences, specific.
+- whyNowDetail: 3-6 sentences expanding on the specifics strictly from the results (dates, figures, what happened); empty string if no extra detail exists.
 
-Return JSON: {"whyNow":"...","eventType":"layoffs|m&a|datacenter|refresh|leadership|breach|regulatory|esg|none","confidence":"high|medium|low|none","sources":["url"]}`;
+Return JSON: {"whyNow":"...","whyNowDetail":"...","eventType":"layoffs|m&a|datacenter|refresh|leadership|breach|regulatory|esg|none","confidence":"high|medium|low|none","sources":["url"]}`;
 
   const { json: parsed } = await geminiJSON(apiKey, prompt);
 
@@ -632,6 +635,10 @@ Return JSON: {"whyNow":"...","eventType":"layoffs|m&a|datacenter|refresh|leaders
       typeof parsed.whyNow === 'string' && parsed.whyNow.trim()
         ? parsed.whyNow.trim()
         : 'No credible recent public event found; rationale rests on Apollo structured signals.',
+    detail:
+      typeof parsed.whyNowDetail === 'string' && parsed.whyNowDetail.trim()
+        ? parsed.whyNowDetail.trim()
+        : undefined,
     eventType: parsed.eventType || 'none',
     confidence: sources.length === 0 ? 'none' : confidence,
     sources,
@@ -838,6 +845,7 @@ interface WebCompany {
   vertical?: string;
   eventType?: string;
   whyNow?: string;
+  whyNowDetail?: string;
   confidence?: string;
   sources?: string[];
 }
@@ -974,6 +982,7 @@ function buildWebPick(c: WebCompany): Pick {
       whyNow:
         c.whyNow?.trim() ||
         'No specific event text returned; see sources for context.',
+      detail: c.whyNowDetail?.trim() || undefined,
       eventType: c.eventType || 'none',
       confidence,
       sources: Array.isArray(c.sources) ? c.sources.slice(0, 4) : [],
@@ -1043,7 +1052,9 @@ Rules:
 - Do NOT include any of these recently-featured names: ${avoid.join(', ') || '(none)'}.
 - If fewer than 10 qualify, return fewer. Do NOT fabricate.
 
-Return JSON: {"companies":[{"name":"","website":"","hqCity":"","hqState":"","hqCountry":"","sizeTier":"enterprise|mid-market","approxEmployees":"","vertical":"Financial Services|Insurance|Healthcare & Pharma|Government & Public Sector|Telecom|Technology & Data Center|Other / Diversified","eventType":"layoffs|m&a|datacenter|refresh|leadership|breach|regulatory|esg","whyNow":"1-2 specific sentences tying the event to a data-sanitization need","confidence":"high|medium|low","sources":["url"]}]}`;
+- "whyNowDetail" must elaborate using ONLY specifics found in the results (dates, figures, what exactly happened, named locations/units) — no outside knowledge, no speculation. If the results contain no detail beyond the one-liner, return an empty string for it.
+
+Return JSON: {"companies":[{"name":"","website":"","hqCity":"","hqState":"","hqCountry":"","sizeTier":"enterprise|mid-market","approxEmployees":"","vertical":"Financial Services|Insurance|Healthcare & Pharma|Government & Public Sector|Telecom|Technology & Data Center|Other / Diversified","eventType":"layoffs|m&a|datacenter|refresh|leadership|breach|regulatory|esg","whyNow":"1-2 specific sentences tying the event to a data-sanitization need","whyNowDetail":"3-6 sentences expanding on the specific situation strictly from the sources, and why it creates a data-sanitization need","confidence":"high|medium|low","sources":["url"]}]}`;
 
   const { json, error, model } = await geminiJSON(apiKey, prompt);
   let companies: WebCompany[] = [];
@@ -1182,6 +1193,16 @@ export function renderEmailHtml(r: RunResult): string {
             )
             .join(' &middot; ')}</div>`
         : '';
+      const detail = p.whyNow.detail?.trim();
+      const whyMore =
+        detail && detail !== p.whyNow.whyNow.trim()
+          ? `<details style="margin-top:6px;">
+              <summary style="cursor:pointer;color:#4f46e5;font-size:13px;list-style:none;">Show more &#9656;</summary>
+              <div style="margin-top:5px;color:#374151;font-size:13px;line-height:1.5;">${escapeHtml(
+                detail,
+              )}</div>
+            </details>`
+          : '';
       const contactsHtml = p.contacts.length
         ? `<strong>Who to reach (from public sources):</strong>` +
           p.contacts
@@ -1240,6 +1261,7 @@ export function renderEmailHtml(r: RunResult): string {
               <div style="margin-top:5px;color:#374151;">${escapeHtml(
                 p.whyNow.whyNow,
               )}</div>
+              ${whyMore}
               ${sources}
             </div>
             <div style="font-size:13px;color:#374151;margin-top:10px;border-top:1px dashed #e5e7eb;padding-top:10px;">

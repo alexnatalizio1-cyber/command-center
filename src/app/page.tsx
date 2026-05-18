@@ -23,10 +23,11 @@ import ContentCalendar from '@/components/ContentCalendar';
 import GeminiChat from '@/components/GeminiChat';
 import SheetsPanel from '@/components/SheetsPanel';
 import WeeklyDigest from '@/components/WeeklyDigest';
+import MarketResearchPanel from '@/components/MarketResearchPanel';
 import SettingsPanel from '@/components/SettingsPanel';
 import MobileTabBar from '@/components/MobileTabBar';
 
-type View = 'dashboard' | 'ai-hub' | 'gmail' | 'calendar' | 'drive' | 'content' | 'notes' | 'tasks' | 'bookmarks' | 'settings';
+type View = 'dashboard' | 'ai-hub' | 'gmail' | 'calendar' | 'drive' | 'content' | 'notes' | 'tasks' | 'bookmarks' | 'market-research' | 'settings';
 
 function getGreeting() {
   const hour = new Date().getHours();
@@ -237,6 +238,9 @@ export default function Home() {
               <SheetsPanel />
               <WeeklyDigest />
             </div>
+
+            {/* Market Research Agent */}
+            <MarketResearchPanel />
           </div>
         );
       case 'ai-hub':
@@ -255,6 +259,8 @@ export default function Home() {
         return <TasksPanel />;
       case 'bookmarks':
         return <BookmarksPanel />;
+      case 'market-research':
+        return <MarketResearchPanel />;
       case 'settings':
         return <SettingsPanel />;
       default:
@@ -293,7 +299,7 @@ export default function Home() {
         <>
           <div className="md:hidden fixed inset-0 bg-black/40 z-30" onClick={() => setMobileMenuOpen(false)} />
           <div className="md:hidden fixed top-[60px] left-0 right-0 z-30 bg-surface-1 border-b border-border p-3 animate-slide-up max-h-[70vh] overflow-y-auto">
-            {(['dashboard', 'ai-hub', 'gmail', 'calendar', 'drive', 'content', 'notes', 'tasks', 'bookmarks', 'settings'] as View[]).map((view) => (
+            {(['dashboard', 'ai-hub', 'gmail', 'calendar', 'drive', 'content', 'notes', 'tasks', 'bookmarks', 'market-research', 'settings'] as View[]).map((view) => (
               <button
                 key={view}
                 onClick={() => { setCurrentView(view); setMobileMenuOpen(false); }}

@@ -93,11 +93,21 @@ export interface WhyNow {
   sources: string[];
 }
 
+export interface DecisionMaker {
+  name: string;
+  title: string;
+  url?: string;
+}
+
 export interface Pick extends ScoredAccount {
   vertical: string;
   whyNow: WhyNow;
   suggestedContact: string;
   suggestedSolution: string;
+  /** Approximate total headcount, when known. */
+  employees?: string;
+  /** Named IT/security decision makers found via public web search. */
+  contacts: DecisionMaker[];
 }
 
 // ---------------------------------------------------------------------------
@@ -352,10 +362,11 @@ export interface TavilyResult {
 
 async function tavilySearch(
   query: string,
-  opts: { days?: number; max?: number } = {},
+  opts: { days?: number; max?: number; topic?: 'news' | 'general' } = {},
 ): Promise<{ results: TavilyResult[]; error?: string }> {
   const key = process.env.TAVILY_API_KEY;
   if (!key) return { results: [], error: 'TAVILY_API_KEY not set' };
+  const topic = opts.topic ?? 'news';
   try {
     const res = await fetch('https://api.tavily.com/search', {
       method: 'POST',
@@ -363,9 +374,10 @@ async function tavilySearch(
       body: JSON.stringify({
         api_key: key,
         query,
-        topic: 'news',
+        topic,
         search_depth: 'advanced',
-        days: opts.days ?? 90,
+        // `days` only applies to the news topic; general search ignores it.
+        ...(topic === 'news' ? { days: opts.days ?? 90 } : {}),
         max_results: opts.max ?? 8,
         include_answer: false,
       }),
@@ -495,6 +507,55 @@ function sourcesBlock(results: TavilyResult[]): string {
         `[${i + 1}] ${r.title}\nURL: ${r.url}\n${r.content}`,
     )
     .join('\n\n');
+}
+
+/**
+ * Best-effort named IT/security decision makers via public web search
+ * (LinkedIn, leadership pages, press). Honesty rule: the model may use ONLY
+ * the fetched results and must return nobody rather than invent a name. If
+ * nothing credible is found the caller falls back to the generic role.
+ */
+export async function findDecisionMakers(
+  name: string,
+  domain?: string,
+): Promise<DecisionMaker[]> {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) return [];
+  const q = `${name} (CIO OR CISO OR "Chief Information Officer" OR "Chief Information Security Officer" OR "VP Information Technology" OR "Head of IT Asset Management" OR "IT Director" OR "Head of Infrastructure") leadership LinkedIn`;
+  const { results } = await tavilySearch(q, { topic: 'general', max: 8 });
+  if (results.length === 0) return [];
+
+  const prompt = `You help a Blancco SDR find the right person to contact at a target company about certified data erasure and end-of-life IT asset decommissioning.
+
+Company: "${name}"${domain ? ` (${domain})` : ''}.
+
+Below are real web search results (LinkedIn profiles, leadership pages, press). From ONLY these results, list up to 3 people who are CURRENT IT or security DECISION MAKERS at THIS specific company and best to approach about data sanitization. Priority order: CIO; CISO; VP/Head of IT; Head of IT Asset Management / ITAD; IT Infrastructure Director; Data Protection / Privacy Officer.
+
+SEARCH RESULTS:
+${sourcesBlock(results)}
+
+Rules:
+- Use ONLY the results above. If a real named person who CURRENTLY works at "${name}" is not present in the results, return an empty list. DO NOT guess, infer, or invent names or titles.
+- "title" must be the person's actual stated title from the results.
+- "url" must be a URL copied verbatim from the results above (their LinkedIn or profile/source page).
+- Exclude people who work at a different company, vendors, or recruiters.
+
+Return JSON: {"people":[{"name":"","title":"","url":""}]}`;
+
+  const { json } = await geminiJSON(apiKey, prompt);
+  if (!json || !Array.isArray(json.people)) return [];
+  const allowed = new Set(results.map((r) => r.url));
+  const out: DecisionMaker[] = [];
+  for (const p of json.people) {
+    const nm = typeof p?.name === 'string' ? p.name.trim() : '';
+    const title = typeof p?.title === 'string' ? p.title.trim() : '';
+    if (!nm || !title) continue;
+    const url =
+      typeof p?.url === 'string' && allowed.has(p.url) ? p.url : undefined;
+    out.push({ name: nm, title, url });
+    if (out.length >= 3) break;
+  }
+  return out;
 }
 
 export async function enrichWhyNow(
@@ -700,6 +761,7 @@ export async function runResearch(
       whyNow,
       suggestedContact: g.suggestedContact,
       suggestedSolution: g.suggestedSolution,
+      contacts: [],
     });
   }
 
@@ -732,6 +794,12 @@ export async function runResearch(
   const entCount = picks.filter((p) => p.tier === 'enterprise').length;
   notes.push(
     `Size mix: ${entCount} enterprise / ${picks.length - entCount} mid-market (target ~70/30; ranking is signal-driven, so it can vary).`,
+  );
+
+  await Promise.all(
+    picks.map(async (p) => {
+      p.contacts = await findDecisionMakers(p.name, p.domain);
+    }),
   );
 
   return {
@@ -912,6 +980,8 @@ function buildWebPick(c: WebCompany): Pick {
     },
     suggestedContact: g.suggestedContact,
     suggestedSolution: g.suggestedSolution,
+    employees: c.approxEmployees?.trim() || undefined,
+    contacts: [],
   };
 }
 
@@ -1062,6 +1132,12 @@ Return JSON: {"companies":[{"name":"","website":"","hqCity":"","hqState":"","hqC
     `Size mix: ${entCount} enterprise / ${picks.length - entCount} mid-market (target ~70/30; signal-driven, so it varies).`,
   );
 
+  await Promise.all(
+    picks.map(async (p) => {
+      p.contacts = await findDecisionMakers(p.name, p.domain);
+    }),
+  );
+
   return { date: today(), picks, candidatesEvaluated: evaluated, notes };
 }
 
@@ -1106,6 +1182,25 @@ export function renderEmailHtml(r: RunResult): string {
             )
             .join(' &middot; ')}</div>`
         : '';
+      const contactsHtml = p.contacts.length
+        ? `<strong>Who to reach (from public sources):</strong>` +
+          p.contacts
+            .map(
+              (c) =>
+                `<div style="margin-top:3px;">&bull; ${escapeHtml(
+                  c.name,
+                )} &mdash; ${escapeHtml(c.title)}${
+                  c.url
+                    ? ` &middot; <a href="${escapeAttr(
+                        c.url,
+                      )}" style="color:#4f46e5;">profile</a>`
+                    : ''
+                }</div>`,
+            )
+            .join('')
+        : `<strong>Target contact:</strong> ${escapeHtml(
+            p.suggestedContact,
+          )} <span style="color:#9ca3af;">(no named contact found in public sources)</span>`;
       return `
       <tr><td style="padding:0 0 18px;">
         <table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e5e7eb;border-radius:12px;border-left:4px solid #4f46e5;">
@@ -1132,9 +1227,9 @@ export function renderEmailHtml(r: RunResult): string {
             <div style="font-size:13px;color:#6b7280;margin-bottom:8px;">
               ${escapeHtml(
                 [p.city, p.state, p.country].filter(Boolean).join(', '),
-              )}${p.revenuePrinted ? ` &middot; Revenue ${escapeHtml(p.revenuePrinted)}` : ''}${
-        p.domain ? ` &middot; ${escapeHtml(p.domain)}` : ''
-      }
+              )}${p.employees ? ` &middot; ${escapeHtml(formatEmployees(p.employees))}` : ''}${
+        p.revenuePrinted ? ` &middot; Revenue ${escapeHtml(p.revenuePrinted)}` : ''
+      }${p.domain ? ` &middot; ${escapeHtml(p.domain)}` : ''}
             </div>
             <div style="margin:8px 0;">${signalChips}</div>
             <div style="font-size:14px;color:#111827;margin-top:8px;">
@@ -1151,9 +1246,7 @@ export function renderEmailHtml(r: RunResult): string {
               <strong>Suggested play:</strong> ${escapeHtml(
                 p.suggestedSolution,
               )}<br/>
-              <strong>Target contact:</strong> ${escapeHtml(
-                p.suggestedContact,
-              )}
+              ${contactsHtml}
             </div>
           </td></tr>
         </table>
@@ -1210,6 +1303,10 @@ function shortUrl(u: string): string {
   } catch {
     return u.slice(0, 40);
   }
+}
+function formatEmployees(s: string): string {
+  const v = s.trim();
+  return /employee/i.test(v) ? v : `${v} employees`;
 }
 
 // ---------------------------------------------------------------------------
@@ -1316,7 +1413,9 @@ export async function logToSheet(
     p.whyNow.whyNow,
     p.whyNow.eventType,
     p.whyNow.confidence,
-    p.suggestedContact,
+    p.contacts.length
+      ? p.contacts.map((c) => `${c.name} (${c.title})`).join('; ')
+      : p.suggestedContact,
     p.whyNow.sources.join(' | '),
   ]);
   await sheets.spreadsheets.values.append({

@@ -89,7 +89,7 @@ export async function POST(req: NextRequest) {
         await sendEmail(
           auth,
           to,
-          `Blancco SDR — ${result.picks.length} Target Accounts — ${result.date}`,
+          `Blancco SDR Target Accounts - ${result.date}`,
           html,
         );
         emailed = true;

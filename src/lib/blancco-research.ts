@@ -382,7 +382,7 @@ async function tavilySearch(
       ? data.results.map((r: any) => ({
           title: String(r?.title ?? ''),
           url: String(r?.url ?? ''),
-          content: String(r?.content ?? '').slice(0, 800),
+          content: String(r?.content ?? '').slice(0, 600),
         }))
       : [];
     return { results };
@@ -394,57 +394,98 @@ async function tavilySearch(
   }
 }
 
-/** Free-tier Gemini call (no grounding) that returns parsed JSON. */
-async function geminiJSON(
-  apiKey: string,
-  prompt: string,
-): Promise<{ json: any; error?: string }> {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
-  let data: any;
+// Free-tier Gemini models, in fallback order. Each model has its OWN free
+// quota bucket, so a 429 ("quota exceeded") on one is very often served fine
+// by the next — this is the zero-cost way to survive free-tier rate limits
+// without enabling paid billing. The -lite variants carry the largest free
+// daily allowances and are ideal fallbacks for this JSON-extraction task.
+const GEMINI_MODELS = [
+  'gemini-2.0-flash',
+  'gemini-2.5-flash',
+  'gemini-2.5-flash-lite',
+  'gemini-2.0-flash-lite',
+];
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+function extractJson(raw: string): any | undefined {
   try {
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: {
-          responseMimeType: 'application/json',
-          temperature: 0.3,
-        },
-      }),
-    });
-    if (!res.ok) {
-      const t = await res.text().catch(() => '');
-      return { json: null, error: `Gemini HTTP ${res.status}: ${t.slice(0, 200)}` };
-    }
-    data = await res.json();
-  } catch (e) {
-    return {
-      json: null,
-      error: e instanceof Error ? e.message : 'Gemini request failed',
-    };
-  }
-  const raw = (data?.candidates?.[0]?.content?.parts ?? [])
-    .map((p: any) => (typeof p?.text === 'string' ? p.text : ''))
-    .join('')
-    .trim();
-  try {
-    return { json: JSON.parse(raw) };
+    return JSON.parse(raw);
   } catch {
     const start = raw.search(/[\[{]/);
     const end = Math.max(raw.lastIndexOf('}'), raw.lastIndexOf(']'));
     if (start !== -1 && end > start) {
       try {
-        return { json: JSON.parse(raw.slice(start, end + 1)) };
+        return JSON.parse(raw.slice(start, end + 1));
       } catch {
         /* fall through */
       }
     }
-    return {
-      json: null,
-      error: `Unparseable model output${raw ? '' : ' (empty response)'}`,
-    };
+    return undefined;
   }
+}
+
+/**
+ * Free-tier Gemini call (no grounding) that returns parsed JSON.
+ *
+ * Resilient to free-tier rate limits: it cycles through several free models
+ * (each with an independent quota bucket) and, if every model is throttled,
+ * does one slow second pass to wait out a per-minute window. This keeps the
+ * agent at $0 without enabling Gemini paid billing.
+ */
+async function geminiJSON(
+  apiKey: string,
+  prompt: string,
+): Promise<{ json: any; error?: string; model?: string }> {
+  const body = JSON.stringify({
+    contents: [{ parts: [{ text: prompt }] }],
+    generationConfig: {
+      responseMimeType: 'application/json',
+      temperature: 0.3,
+    },
+  });
+  let lastError = 'Gemini request failed';
+
+  for (let pass = 0; pass < 2; pass++) {
+    // Second pass waits out a per-minute throttle window before retrying.
+    if (pass === 1) await sleep(8000);
+    for (const model of GEMINI_MODELS) {
+      let data: any;
+      try {
+        const res = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body,
+          },
+        );
+        if (!res.ok) {
+          const t = await res.text().catch(() => '');
+          lastError = `Gemini HTTP ${res.status} on ${model}: ${t.slice(0, 160)}`;
+          // 429 (quota) / 503 (overload): try the next model, which has a
+          // separate quota bucket. Other errors: also fall through.
+          continue;
+        }
+        data = await res.json();
+      } catch (e) {
+        lastError = e instanceof Error ? e.message : 'Gemini request failed';
+        continue;
+      }
+      const raw = (data?.candidates?.[0]?.content?.parts ?? [])
+        .map((p: any) => (typeof p?.text === 'string' ? p.text : ''))
+        .join('')
+        .trim();
+      const parsed = extractJson(raw);
+      if (parsed !== undefined) return { json: parsed, model };
+      lastError = `Unparseable model output from ${model}${
+        raw ? '' : ' (empty response)'
+      }`;
+    }
+  }
+  return { json: null, error: lastError };
 }
 
 function sourcesBlock(results: TavilyResult[]): string {
@@ -892,18 +933,22 @@ export async function runWebResearch(
     'new CISO OR CIO appointment United States enterprise company',
   ];
   const searches = await Promise.all(
-    queries.map((q) => tavilySearch(q, { days: 90, max: 8 })),
+    queries.map((q) => tavilySearch(q, { days: 90, max: 6 })),
   );
   const seenUrl = new Set<string>();
-  const results: TavilyResult[] = [];
+  const dedupedResults: TavilyResult[] = [];
   for (const s of searches) {
     for (const r of s.results) {
       if (r.url && !seenUrl.has(r.url)) {
         seenUrl.add(r.url);
-        results.push(r);
+        dedupedResults.push(r);
       }
     }
   }
+  // Cap the corpus fed to Gemini: a smaller prompt stays well under the
+  // free-tier per-minute token limit (the Weekly Digest prompt is tiny and
+  // never throttles on the same key — the size difference is what 429s here).
+  const results = dedupedResults.slice(0, 24);
   const searchErr = searches.find((s) => s.error)?.error;
 
   if (results.length === 0) {
@@ -930,9 +975,12 @@ Rules:
 
 Return JSON: {"companies":[{"name":"","website":"","hqCity":"","hqState":"","hqCountry":"","sizeTier":"enterprise|mid-market","approxEmployees":"","vertical":"Financial Services|Insurance|Healthcare & Pharma|Government & Public Sector|Telecom|Technology & Data Center|Other / Diversified","eventType":"layoffs|m&a|datacenter|refresh|leadership|breach|regulatory|esg","whyNow":"1-2 specific sentences tying the event to a data-sanitization need","confidence":"high|medium|low","sources":["url"]}]}`;
 
-  const { json, error } = await geminiJSON(apiKey, prompt);
+  const { json, error, model } = await geminiJSON(apiKey, prompt);
   let companies: WebCompany[] = [];
   if (json && Array.isArray(json.companies)) {
+    notes.push(
+      `Synthesis by Gemini model "${model}" over ${results.length} live web results.`,
+    );
     const allowed = new Set(results.map((r) => r.url));
     companies = (json.companies as WebCompany[])
       .map((c) => ({

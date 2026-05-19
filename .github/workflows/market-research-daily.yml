@@ -10,6 +10,12 @@
 #   MARKET_RESEARCH_APP_URL     e.g. https://your-app.vercel.app  (no trailing /)
 #   MARKET_RESEARCH_CRON_SECRET same value as the deployed env var;
 #                               generate with: openssl rand -hex 32
+#   VERCEL_AUTOMATION_BYPASS_SECRET
+#                               required because Vercel Deployment Protection
+#                               ("Vercel Authentication") is enabled. Create it
+#                               in Vercel: Project -> Settings -> Deployment
+#                               Protection -> Protection Bypass for Automation
+#                               -> copy the generated secret here.
 #
 # The deployed app also needs (in its hosting env, NOT here):
 #   APOLLO_API_KEY, GEMINI_API_KEY, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET,
@@ -66,9 +72,15 @@ jobs:
             echo "::error::MARKET_RESEARCH_APP_URL and MARKET_RESEARCH_CRON_SECRET repo secrets are required."
             exit 1
           fi
+          if [ -z "${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}" ]; then
+            echo "::error::VERCEL_AUTOMATION_BYPASS_SECRET repo secret is required because Vercel Deployment Protection is enabled. Create it in Vercel: Settings -> Deployment Protection -> Protection Bypass for Automation."
+            exit 1
+          fi
           code=$(curl -sS -w "%{http_code}" -o response.json \
             -X POST "${{ secrets.MARKET_RESEARCH_APP_URL }}/api/market-research" \
             -H "Authorization: Bearer ${{ secrets.MARKET_RESEARCH_CRON_SECRET }}" \
+            -H "x-vercel-protection-bypass: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}" \
+            -H "x-vercel-set-bypass-cookie: false" \
             -H "Content-Type: application/json" \
             --max-time 290 \
             -d '{}')

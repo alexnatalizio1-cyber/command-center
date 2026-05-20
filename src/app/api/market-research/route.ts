@@ -9,17 +9,21 @@ import {
   logToSheet,
   readHistory,
   recentDomainsFromHistory,
+  today,
 } from '@/lib/blancco-research';
 
 export const maxDuration = 300;
 export const dynamic = 'force-dynamic';
 
-function authorized(req: NextRequest, hasSession: boolean): boolean {
+function checkAuth(
+  req: NextRequest,
+  hasSession: boolean,
+): { ok: boolean; isCron: boolean } {
   const secret = process.env.MARKET_RESEARCH_CRON_SECRET;
   const header = req.headers.get('authorization') ?? '';
   const bearer = header.replace(/^Bearer\s+/i, '');
-  if (secret && bearer && bearer === secret) return true;
-  return hasSession;
+  if (secret && bearer && bearer === secret) return { ok: true, isCron: true };
+  return { ok: hasSession, isCron: false };
 }
 
 function recipients(): string[] {
@@ -38,7 +42,8 @@ function recipients(): string[] {
 export async function POST(req: NextRequest) {
   try {
     const session = await getServerSession(authOptions);
-    if (!authorized(req, Boolean(session?.user))) {
+    const { ok, isCron } = checkAuth(req, Boolean(session?.user));
+    if (!ok) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
@@ -61,13 +66,32 @@ export async function POST(req: NextRequest) {
     }
     const auth = getServiceAuthClient();
 
-    // Avoid repeating companies featured in the last ~14 days.
+    // Avoid repeating companies featured in the last ~14 days, and detect if
+    // today's email already went out (idempotency for the multi-cron daily
+    // window — only the first invocation actually sends).
     let recentDomains = new Set<string>();
+    let alreadySentToday = false;
+    const todayStr = today();
     try {
       const hist = await readHistory(auth, 120);
       recentDomains = recentDomainsFromHistory(hist.rows);
+      alreadySentToday = hist.rows.some(
+        (r) => (r[0] ?? '').trim() === todayStr,
+      );
     } catch {
       // history not available yet — proceed with empty set
+    }
+
+    // Cron path: if today's row is already in the Sheet, the first cron of the
+    // day already delivered — short-circuit so back-up crons never duplicate.
+    // Dashboard (session) sends always run on demand.
+    if (isCron && !dryRun && alreadySentToday) {
+      return NextResponse.json({
+        skipped: true,
+        reason: 'already sent today',
+        date: todayStr,
+        emailed: false,
+      });
     }
 
     const result = await runResearch(recentDomains);

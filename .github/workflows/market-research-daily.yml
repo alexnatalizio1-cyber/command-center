@@ -34,24 +34,25 @@ name: Daily Market Research
 
 on:
   schedule:
-    # GitHub cron is UTC-only and has no DST awareness. 9:00 AM US Eastern is
-    # 13:00 UTC during EDT and 14:00 UTC during EST, so we fire on BOTH (Mon-Fri)
-    # and the gate step below lets exactly one through — whichever is actually
-    # 09:00 in America/New_York that day. Result: 9 AM Eastern, weekdays only,
-    # year-round, no double-send, no weekends.
+    # GitHub cron is UTC-only with no DST awareness. We want the email to land
+    # between 08:00 and 09:30 US Eastern on weekdays, even when GitHub cron is
+    # delayed (today's first test was ~55 min late). So we fire THREE crons
+    # and let the gate + same-day idempotency in the API route deliver exactly
+    # one email per weekday inside the window.
+    #
+    #   12:00 UTC  =>  08:00 EDT  /  07:00 EST
+    #   13:00 UTC  =>  09:00 EDT  /  08:00 EST
+    #   14:00 UTC  =>  10:00 EDT  /  09:00 EST
+    - cron: '0 12 * * 1-5'
     - cron: '0 13 * * 1-5'
     - cron: '0 14 * * 1-5'
-    # One-shot TEST: 11:30 AM ET on 2026-05-20 (15:30 UTC during EDT). Fires
-    # daily but the gate's date check restricts the test send to that one day.
-    # Safe to remove after the test email arrives.
-    - cron: '30 15 * * *'
   workflow_dispatch: # allow manual "Run workflow" from the Actions tab
 
 jobs:
   run:
     runs-on: ubuntu-latest
     steps:
-      - name: Gate scheduled runs to 09:00 ET weekdays (plus one-shot test window)
+      - name: Gate scheduled runs to 08:00-09:30 ET, weekdays
         id: gate
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
@@ -59,30 +60,22 @@ jobs:
             echo "proceed=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          nyc_date=$(TZ="America/New_York" date +%F)
           nyc_hour=$(TZ="America/New_York" date +%H)
           nyc_min=$(TZ="America/New_York" date +%M)
           nyc_dow=$(TZ="America/New_York" date +%u)   # 1=Mon .. 7=Sun
           mins=$((10#$nyc_hour * 60 + 10#$nyc_min))
-          echo "Eastern now: $(TZ='America/New_York' date)  (date=$nyc_date hour=$nyc_hour min=$nyc_min dow=$nyc_dow mins_since_midnight=$mins)"
+          echo "Eastern now: $(TZ='America/New_York' date)  (hour=$nyc_hour min=$nyc_min dow=$nyc_dow mins_since_midnight=$mins)"
 
-          # Daily 09:00 ET weekday send (hour=09, any minute, Mon-Fri).
-          if [ "$nyc_hour" = "09" ] && [ "$nyc_dow" -ge 1 ] && [ "$nyc_dow" -le 5 ]; then
-            echo "In the daily 09:00 ET weekday window — proceeding."
+          # Window: 08:00 (480) - 09:30 (570) ET, Mon-Fri. Multiple crons fire
+          # inside this window; the API route's same-day idempotency check
+          # guarantees only the first one to deliver actually sends an email.
+          if [ "$nyc_dow" -ge 1 ] && [ "$nyc_dow" -le 5 ] && [ "$mins" -ge 480 ] && [ "$mins" -le 570 ]; then
+            echo "Inside 08:00-09:30 ET weekday window — proceeding."
             echo "proceed=true" >> "$GITHUB_OUTPUT"
-            exit 0
+          else
+            echo "Outside the 08:00-09:30 ET weekday window — skipping this trigger."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
           fi
-
-          # One-shot TEST: 11:30 ET on 2026-05-20, with a 60-minute leniency
-          # window (until 12:30 ET) to absorb GitHub Actions cron delays.
-          if [ "$nyc_date" = "2026-05-20" ] && [ "$mins" -ge 690 ] && [ "$mins" -lt 750 ]; then
-            echo "In the one-shot test window (11:30-12:30 ET, 2026-05-20) — proceeding."
-            echo "proceed=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          echo "Not in any active window — skipping this trigger."
-          echo "proceed=false" >> "$GITHUB_OUTPUT"
       - name: Trigger market-research run
         if: steps.gate.outputs.proceed == 'true'
         run: |

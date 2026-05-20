@@ -1336,7 +1336,7 @@ Return JSON: {"detail":"","eventDate":"","confidence":"high|medium|low","sources
 // Email rendering.
 // ---------------------------------------------------------------------------
 
-function today(): string {
+export function today(): string {
   return new Date().toLocaleDateString('en-US', {
     weekday: 'long',
     year: 'numeric',

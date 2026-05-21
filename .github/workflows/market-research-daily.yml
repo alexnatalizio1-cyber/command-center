@@ -34,18 +34,31 @@ name: Daily Market Research
 
 on:
   schedule:
-    # GitHub cron is UTC-only with no DST awareness. We want the email to land
-    # between 08:00 and 09:30 US Eastern on weekdays, even when GitHub cron is
-    # delayed (today's first test was ~55 min late). So we fire THREE crons
-    # and let the gate + same-day idempotency in the API route deliver exactly
-    # one email per weekday inside the window.
+    # GitHub cron is UTC-only, DST-unaware, AND unreliable at the top of the
+    # hour (:00 is the most congested slot — runs there get delayed or dropped).
+    # So we scatter MANY triggers across odd, off-peak minutes, starting before
+    # and through the window. The gate keeps only those that actually execute
+    # inside 08:00-09:30 ET; the API route's same-day idempotency makes every
+    # trigger after the first a harmless no-op. Net: one email per weekday,
+    # inside the window, resilient to GitHub's cron lateness.
     #
-    #   12:00 UTC  =>  08:00 EDT  /  07:00 EST
-    #   13:00 UTC  =>  09:00 EDT  /  08:00 EST
-    #   14:00 UTC  =>  10:00 EDT  /  09:00 EST
-    - cron: '0 12 * * 1-5'
-    - cron: '0 13 * * 1-5'
-    - cron: '0 14 * * 1-5'
+    #                 ET (EDT)   ET (EST)
+    #   11:37 UTC  =>  07:37   /  06:37   (pre-window delayed-fire catcher)
+    #   12:08 UTC  =>  08:08   /  07:08
+    #   12:26 UTC  =>  08:26   /  07:26
+    #   12:52 UTC  =>  08:52   /  07:52
+    #   13:13 UTC  =>  09:13   /  08:13
+    #   13:38 UTC  =>  09:38   /  08:38
+    #   14:07 UTC  =>  10:07   /  09:07
+    #   14:26 UTC  =>  10:26   /  09:26
+    - cron: '37 11 * * 1-5'
+    - cron: '8 12 * * 1-5'
+    - cron: '26 12 * * 1-5'
+    - cron: '52 12 * * 1-5'
+    - cron: '13 13 * * 1-5'
+    - cron: '38 13 * * 1-5'
+    - cron: '7 14 * * 1-5'
+    - cron: '26 14 * * 1-5'
   workflow_dispatch: # allow manual "Run workflow" from the Actions tab
 
 jobs:
